@@ -41,8 +41,11 @@ jobs:
       - name: Character tests
         run: npm run test:characters
 
-      - name: Cognition tests
-        run: npm run test:cognition
+      - name: Autonomous mind tests
+        run: node --import tsx --test cognition/tests/autonomousMind.test.ts
+
+      - name: Cognition manager tests
+        run: node --import tsx --test cognition/tests/cognition.test.ts
 
       - name: API hub tests
         run: npm run test:api-hub
