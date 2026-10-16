@@ -35,8 +35,26 @@ jobs:
       - name: Type-check
         run: npm run lint
 
-      - name: Node tests
-        run: npm run test:node
+      - name: Agent and intelligence tests
+        run: npm run test:agent
+
+      - name: Character tests
+        run: npm run test:characters
+
+      - name: Cognition tests
+        run: npm run test:cognition
+
+      - name: API hub tests
+        run: npm run test:api-hub
+
+      - name: Screen vision tests
+        run: npm run test:screen-vision
+
+      - name: Browser boundary tests
+        run: npm run test:real-browser
+
+      - name: Optional live-provider tests
+        run: npm run test:live
 
       - name: Python tests
         run: npm run test:python
