@@ -208,6 +208,7 @@ Executed in this repository on 2026-10-16:
 | Intelligence/cognition targeted run | **16 passed, 0 failed** in 1.46 s reported test duration. The three intelligence tests alone completed in 0.44 s; fixture consultation responses declare 7–11 ms synthetic adapter latency. These are orchestration fixtures, not cloud-provider benchmarks. |
 | `PATH="$PWD/.venv/bin:$PATH" npm run test:python` | **29 passed, 0 failed, 3 Windows-only skipped** (32 total) in 0.089 s reported test time. |
 | `npm run build` | Passed. Vite transformed 2,143 modules in 8.97 s; the Node backend bundle completed in 144 ms. Total command wall time was approximately 10.05 s. |
+| GitHub `windows-latest` CI | Passed in 1m54s on PR run 38934901774: install, type-check, all Node suites, Python suite and production build. This validates automation on a Windows runner, not interactive UIA/OCR/microphone behavior. |
 | Production HTTP smoke | Root `200`; intelligence status `200`; unauthorized research correctly `400`; status reported 4 providers, 10 models and no fabricated activity. Ten loopback status requests measured **0.90 ms min / 1.47 ms mean / 4.60 ms max** in this sandbox. |
 | `npm audit --json` | 0 critical, 0 high, 8 moderate, 0 low. The remaining findings are development/build transitive dependencies documented in the baseline audit; no forced breaking remediation was applied. |
 | `git diff --check` | Passed. |
