@@ -35,6 +35,7 @@ import { UserPresenceEngine } from "../presence/userPresence";
 import { AppSettingsStore, type AppSettings } from "../settings/appSettings";
 import { appEvents, type AppEvent } from "../shared/appEvents";
 import { createLogger, logHub } from "../shared/logger";
+import { IntelligenceService } from "../intelligence/service";
 import { CharacterLibrary } from "./characterLibrary";
 import { PoseStore } from "./poseStore";
 
@@ -72,6 +73,7 @@ export class MyraaRuntime {
   readonly settings: AppSettingsStore;
   readonly registry: ModelRegistry;
   readonly router: ModelRouter;
+  readonly intelligence: IntelligenceService;
   readonly permissions: PermissionEngine;
   readonly confirmations = new ConfirmationBroker();
   readonly tasks: TaskStore;
@@ -104,6 +106,7 @@ export class MyraaRuntime {
     this.currentSettings = this.settings.get();
     this.registry = new ModelRegistry(dataDir, options.getSecret);
     this.router = new ModelRouter(this.registry);
+    this.intelligence = new IntelligenceService(this.router, dataDir);
     this.permissions = new PermissionEngine(dataDir);
     this.tasks = new TaskStore({ dataDir });
     this.perception = new PerceptionEngine(options.callAgent, this.router);
@@ -161,6 +164,7 @@ export class MyraaRuntime {
     this.currentSettings = await this.settings.initialize(this.options.legacySettings);
     await Promise.all([
       this.registry.initialize(),
+      this.intelligence.initialize(),
       this.permissions.initialize(),
       this.tasks.initialize(),
       this.downloads.initialize(),
@@ -479,6 +483,7 @@ export class MyraaRuntime {
     };
 
     app.use("/user-characters", express.static(this.characters.root, { fallthrough: true, index: false, dotfiles: "deny" }));
+    this.intelligence.registerRoutes(app);
 
     // models
     app.get("/api/models", wrap(() => ({
@@ -504,12 +509,13 @@ export class MyraaRuntime {
       await this.registry.saveUserModel(definition);
       return this.registry.publicCatalogue();
     }));
-    app.post("/api/providers/:id/key", wrap((req) => {
+    app.post("/api/providers/:id/key", wrap(async (req) => {
       const provider = this.registry.getProviderConfig(String(req.params.id));
       if (!provider?.secretName) throw new Error("Unknown provider or provider does not use a key.");
       const key = String(req.body?.apiKey || "").trim();
       if (!key) throw new Error("API key is required.");
       this.options.setSecret(provider.secretName, key);
+      if (!provider.enabled) await this.registry.setProviderEnabled(provider.id, true);
       return { ok: true, configured: true };
     }));
 
@@ -654,10 +660,10 @@ export class MyraaRuntime {
     }));
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     for (const timer of this.timers) clearInterval(timer);
     this.utilities.dispose();
-    void this.tasks.flush();
+    await Promise.all([this.tasks.flush(), this.intelligence.shutdown()]);
   }
 }
 

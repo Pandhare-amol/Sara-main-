@@ -20,8 +20,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import __version__
 from .registry import DESKTOP_TOOL_NAMES, TOOLS, ToolError, load_all
@@ -60,19 +59,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Same-origin Node bridge is the only caller; allow localhost origins flexibly.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The Node backend is the only supported caller and does not need CORS.
+# Deliberately omit CORS headers so a web page on another localhost service
+# cannot turn this desktop-control process into a browser-accessible deputy.
 
 
 class ExecuteRequest(BaseModel):
     tool: str
-    args: Dict[str, Any] = {}
+    args: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ExecuteResponse(BaseModel):

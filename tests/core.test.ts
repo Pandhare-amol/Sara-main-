@@ -9,11 +9,37 @@ import { InputArbiter, ResourceScheduler } from "../agent/scheduler";
 import { PermissionEngine, migrateFromLegacyEnv } from "../permissions/engine";
 import { ConfirmationBroker } from "../permissions/confirmations";
 import { redact, redactText, summarizeArgs } from "../shared/redact";
+import { assertSafeExternalUrl, isPrivateAddress, readResponseBytes, safeFetch } from "../shared/netSafety";
 import { SecretStore } from "../secrets/secretStore";
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "myraa-core-"));
 }
+
+test("outbound URL safety blocks private DNS results and unsafe redirects", async () => {
+  assert.equal(isPrivateAddress("127.0.0.1"), true);
+  assert.equal(isPrivateAddress("203.0.113.8"), true);
+  await assert.rejects(
+    () => assertSafeExternalUrl("https://private.example.test/data", async () => [{ address: "10.0.0.5" }]),
+    /Private, loopback, or link-local/,
+  );
+
+  let calls = 0;
+  await assert.rejects(
+    () => safeFetch("https://public.example.test/start", {
+      lookup: async () => [{ address: "93.184.216.34" }],
+      fetcher: async () => {
+        calls += 1;
+        return new Response(null, { status: 302, headers: { location: "http://127.0.0.1/secrets" } });
+      },
+    }),
+    /Private, loopback, or link-local/,
+  );
+  assert.equal(calls, 1, "the private redirect must be rejected before it is fetched");
+
+  const oversized = new Response(new Uint8Array(32), { headers: { "content-type": "application/octet-stream" } });
+  await assert.rejects(() => readResponseBytes(oversized, 16), /size limit/);
+});
 
 test("cancellation propagates to every descendant and aborts signals", async () => {
   const root = new CancellationScope("root");
@@ -151,6 +177,15 @@ test("confirmation broker resolves once, expires and cancels with the task", asy
   const cancelled = broker.request({ taskId: "t3", capability: "RUN_COMMAND", title: "", description: "", details: {}, allowRemember: false }, { signal: controller.signal });
   controller.abort();
   assert.equal((await cancelled.answer).via, "cancel");
+
+  const alreadyStopped = new AbortController();
+  alreadyStopped.abort();
+  const cancelledImmediately = broker.request(
+    { taskId: "t4", capability: "RUN_COMMAND", title: "", description: "", details: {}, allowRemember: false },
+    { signal: alreadyStopped.signal },
+  );
+  assert.equal((await cancelledImmediately.answer).via, "cancel");
+  assert.equal(broker.list().length, 0);
 });
 
 test("redaction removes secrets from text and structured data", () => {

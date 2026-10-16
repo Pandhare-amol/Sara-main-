@@ -281,8 +281,20 @@ class CompanionManager {
         preload: this.options.preload,
         contextIsolation: true,
         nodeIntegration: false,
+        sandbox: true,
         backgroundThrottling: false,
       },
+    });
+    // This window has the same privileged preload as the main UI. It never
+    // needs popups or remote navigation.
+    this.win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    this.win.webContents.on('will-navigate', (event, url) => {
+      try {
+        if (new URL(url).origin === this.options.origin) return;
+      } catch {
+        /* deny malformed navigation */
+      }
+      event.preventDefault();
     });
     // Above the taskbar so she can sit on it.
     this.win.setAlwaysOnTop(true, 'screen-saver');

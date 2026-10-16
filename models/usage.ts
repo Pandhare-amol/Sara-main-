@@ -1,5 +1,5 @@
 /** Per-model and per-purpose usage accounting for the developer view. */
-import type { ModelErrorCode, Usage } from "./types";
+import type { ModelDefinition, ModelErrorCode, Usage } from "./types";
 
 export interface ModelUsageStats {
   calls: number;
@@ -7,6 +7,10 @@ export interface ModelUsageStats {
   inputTokens: number;
   outputTokens: number;
   reasoningTokens: number;
+  /** Sum for calls whose registry configuration declares both token prices. */
+  estimatedCostUsd: number;
+  /** Calls omitted from estimatedCostUsd because current pricing is unknown. */
+  unpricedCalls: number;
   totalLatencyMs: number;
   lastUsedAt: string | null;
   lastError: { code: ModelErrorCode; message: string; at: string } | null;
@@ -15,6 +19,7 @@ export interface ModelUsageStats {
 function empty(): ModelUsageStats {
   return {
     calls: 0, failures: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0,
+    estimatedCostUsd: 0, unpricedCalls: 0,
     totalLatencyMs: 0, lastUsedAt: null, lastError: null,
   };
 }
@@ -23,12 +28,18 @@ export class UsageTracker {
   private readonly byModel = new Map<string, ModelUsageStats>();
   private readonly byPurpose = new Map<string, ModelUsageStats>();
 
-  recordSuccess(modelId: string, purpose: string, usage: Usage, latencyMs: number): void {
+  recordSuccess(modelId: string, purpose: string, usage: Usage, latencyMs: number, cost?: ModelDefinition["cost"]): void {
+    const priced = cost?.inputPerMTok !== undefined && cost.outputPerMTok !== undefined;
+    const estimate = priced
+      ? (usage.inputTokens * cost.inputPerMTok! + (usage.outputTokens + usage.reasoningTokens) * cost.outputPerMTok!) / 1_000_000
+      : 0;
     for (const stats of [this.get(this.byModel, modelId), this.get(this.byPurpose, purpose)]) {
       stats.calls += 1;
       stats.inputTokens += usage.inputTokens;
       stats.outputTokens += usage.outputTokens;
       stats.reasoningTokens += usage.reasoningTokens;
+      stats.estimatedCostUsd += estimate;
+      if (!priced) stats.unpricedCalls += 1;
       stats.totalLatencyMs += latencyMs;
       stats.lastUsedAt = new Date().toISOString();
     }

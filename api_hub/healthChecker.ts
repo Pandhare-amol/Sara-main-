@@ -1,4 +1,5 @@
 import net from "node:net";
+import { isPrivateAddress, safeFetch, type ExternalUrlLookup } from "../shared/netSafety";
 import type { ApiProvider } from "./types";
 
 export interface HealthCheckResult {
@@ -11,7 +12,7 @@ export interface HealthCheckResult {
 
 export async function checkProviderDocumentation(
   provider: ApiProvider,
-  options: { timeoutMs?: number; fetcher?: typeof fetch } = {},
+  options: { timeoutMs?: number; fetcher?: typeof fetch; lookup?: ExternalUrlLookup } = {},
 ): Promise<HealthCheckResult> {
   const checkedAt = new Date().toISOString();
   if (!isSafePublicUrl(provider.documentationUrl)) {
@@ -22,9 +23,11 @@ export async function checkProviderDocumentation(
   timeout.unref?.();
   const started = Date.now();
   try {
-    const response = await (options.fetcher || fetch)(provider.documentationUrl, {
+    const response = await safeFetch(provider.documentationUrl, {
       method: "HEAD",
-      redirect: "follow",
+      maxRedirects: 3,
+      fetcher: options.fetcher,
+      lookup: options.lookup,
       signal: controller.signal,
       headers: { "user-agent": "MYRAA-ApiHub/1.0" },
     });
@@ -54,19 +57,11 @@ export function isSafePublicUrl(value: string): boolean {
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return false;
     const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
     if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return false;
-    if (net.isIP(host)) return !isPrivateIp(host);
+    if (net.isIP(host)) return !isPrivateAddress(host);
     return true;
   } catch {
     return false;
   }
-}
-
-function isPrivateIp(host: string): boolean {
-  if (host.includes(":")) {
-    return host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe8") || host.startsWith("fe9") || host.startsWith("fea") || host.startsWith("feb");
-  }
-  const [a, b] = host.split(".").map(Number);
-  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
 function safeError(error: unknown): string {

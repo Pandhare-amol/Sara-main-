@@ -7,4 +7,4 @@ hosts tool code; run with:
     uvicorn desktop_agent.main:app --host 127.0.0.1 --port 8765
 """
 
-__version__ = "1.0.0"
+__version__ = "1.5.2"

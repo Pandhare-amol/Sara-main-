@@ -3,7 +3,7 @@
  * The returned text is untrusted content: it is shown to the planner inside
  * an untrusted block and can never authorize an action.
  */
-import { safeFetch } from "../shared/netSafety";
+import { readResponseBytes, safeFetch, type ExternalUrlLookup } from "../shared/netSafety";
 
 export interface FetchedPage {
   url: string;
@@ -13,27 +13,70 @@ export interface FetchedPage {
   text: string;
   links: Array<{ text: string; href: string }>;
   downloadLinks: Array<{ text: string; href: string }>;
+  retrievedAt: string;
+  lastModified: string | null;
+  contentType: string | null;
+}
+
+export interface FetchPageNetworkOptions {
+  fetcher?: typeof fetch;
+  lookup?: ExternalUrlLookup;
+  userAgent?: string;
 }
 
 const DOWNLOAD_EXT = /\.(exe|msi|msix|zip|7z|dmg|pkg|tar\.(gz|xz)|deb|rpm|appimage|pdf|iso)(\?|#|$)/i;
 
-export async function fetchPage(url: string, signal?: AbortSignal): Promise<FetchedPage> {
+export async function fetchPage(url: string, signal?: AbortSignal, network: FetchPageNetworkOptions = {}): Promise<FetchedPage> {
   const response = await safeFetch(url, {
     signal,
+    fetcher: network.fetcher,
+    lookup: network.lookup,
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml",
+      "User-Agent": network.userAgent || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/json,text/plain,application/xml;q=0.8",
     },
   });
   if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
   const type = response.headers.get("content-type") || "";
-  if (!/html|text/i.test(type)) throw new Error(`Not a web page (${type || "unknown type"}).`);
-  const html = (await response.text()).slice(0, 2_000_000);
+  if (!/html|text|json|xml/i.test(type)) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error(`Unsupported research document type (${type || "unknown type"}).`);
+  }
+  const bytes = await readResponseBytes(response, 2_000_000, "Web page exceeds the 2 MB size limit.");
+  const html = new TextDecoder().decode(bytes);
   const finalUrl = (response as Response & { finalUrl?: string }).finalUrl || url;
-  return parseHtml(html, finalUrl, url);
+  const metadata = {
+    retrievedAt: new Date().toISOString(),
+    lastModified: response.headers.get("last-modified"),
+    contentType: response.headers.get("content-type"),
+  };
+  if (/json/i.test(type)) {
+    let text = html;
+    try { text = JSON.stringify(JSON.parse(html), null, 2); } catch { /* preserve malformed JSON as text evidence */ }
+    return {
+      url,
+      finalUrl,
+      title: new URL(finalUrl).hostname,
+      headings: [],
+      text: text.slice(0, 12_000),
+      links: [],
+      downloadLinks: [],
+      ...metadata,
+    };
+  }
+  return parseHtml(html, finalUrl, url, metadata);
 }
 
-export function parseHtml(html: string, finalUrl: string, requestedUrl = finalUrl): FetchedPage {
+export function parseHtml(
+  html: string,
+  finalUrl: string,
+  requestedUrl = finalUrl,
+  metadata: Pick<FetchedPage, "retrievedAt" | "lastModified" | "contentType"> = {
+    retrievedAt: new Date().toISOString(),
+    lastModified: null,
+    contentType: "text/html",
+  },
+): FetchedPage {
   const stripped = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -66,6 +109,9 @@ export function parseHtml(html: string, finalUrl: string, requestedUrl = finalUr
     text: body,
     links: dedupe(links).slice(0, 80),
     downloadLinks: dedupe(links.filter((link) => DOWNLOAD_EXT.test(link.href) || /download/i.test(link.text))).slice(0, 30),
+    retrievedAt: metadata.retrievedAt,
+    lastModified: metadata.lastModified,
+    contentType: metadata.contentType,
   };
 }
 

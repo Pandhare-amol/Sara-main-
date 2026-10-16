@@ -24,7 +24,7 @@ This pack is the full source. If you just want to use Sara, install the setup .e
 ## Run it in development
 
 ```
-npm install
+npm ci
 pip install -r desktop_agent/requirements.txt
 npm run dev
 ```
@@ -66,11 +66,23 @@ included; use `dist:public`.
 | `server.ts`, `runtime/` | Local backend (Express + WebSocket), Gemini Live bridge |
 | `agent/` | PC-control agent: planner, actions, WhatsApp/chat helpers, safety checks |
 | `desktop_agent/` | Python tool server (UI Automation, input, files, apps) |
-| `models/` | Model router (Gemini and others) |
+| `models/` | Provider-independent model router (Gemini, OpenAI-compatible, Anthropic-compatible and local) |
+| `intelligence/` | Multi-provider review, authorized research, evidence and source-grounded knowledge |
 | `voice/` | Live voice tools |
 | `settings/`, `permissions/`, `secrets/` | Settings, permission engine, DPAPI key store |
 | `character_import/` | PMX importer and capability report |
 | `cognition/`, `memory/`, `presence/` | Memory, initiative and presence |
+
+## Learning and research
+
+Open **LEARN** in the main header to run research against public URLs you explicitly authorize,
+inspect the exact stored source passages, compare configured providers, promote cited findings to
+knowledge, and review versioned skills. Sara checks public-network/redirect safety and robots.txt;
+it does not bypass logins, paywalls, CAPTCHAs or access controls. A citation means a passage supports
+the report, not that the claim was independently verified.
+
+The full SARA 8.0–14.0 capability audit, setup notes, security limits and remaining roadmap are in
+[`docs/SARA-8-14-IMPLEMENTATION-2026-10-16.md`](docs/SARA-8-14-IMPLEMENTATION-2026-10-16.md).
 
 ## Graphics quality
 
@@ -79,7 +91,7 @@ Auto steps down by itself if the character crashes on a weak GPU.
 
 ## Safety
 
-- The API key never reaches the web page; all Gemini calls go through the local backend.
+- API keys are entered locally and posted once to the exact-origin backend secret store; they are never returned to the renderer or included in model catalogues/logs.
 - High-risk actions (sending messages, deleting, installing, purchases) ask for confirmation.
 - Text from websites, documents and the screen is treated as untrusted data.
 - Stop everything any time with the emergency shortcut (default Ctrl+Alt+Shift+S).

@@ -1,0 +1,46 @@
+{
+  "providers": [
+    {
+      "id": "local",
+      "apiType": "openai-compatible",
+      "displayName": "Local OpenAI-compatible server",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "enabled": true,
+      "locality": "local"
+    }
+  ],
+  "models": [
+    {
+      "id": "local-reviewed-model",
+      "displayName": "Local reviewed model",
+      "provider": "local",
+      "modelName": "replace-with-the-model-name-served-locally",
+      "apiType": "openai-compatible",
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "structuredOutput": true,
+        "reasoning": true,
+        "streaming": true,
+        "liveAudio": false,
+        "embedding": false
+      },
+      "contextLength": 32768,
+      "tier": "balanced",
+      "locality": "local",
+      "cost": {
+        "inputPerMTok": 0,
+        "outputPerMTok": 0,
+        "note": "Local compute; electricity/hardware cost is not estimated."
+      },
+      "recommendedTasks": [
+        "conversation",
+        "planning",
+        "coding",
+        "summarization"
+      ],
+      "description": "Example only. Availability is checked against the configured local server.",
+      "enabled": true
+    }
+  ]
+}

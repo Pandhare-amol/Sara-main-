@@ -159,7 +159,7 @@ export function encodePng(width, height, rgba) {
   ]);
 }
 
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || process.argv[1].endsWith('tga2png.mjs')) {
+if (process.argv[1]?.replace(/\\/g, '/').endsWith('/tools/tga2png.mjs')) {
   const [, , input, output] = process.argv;
   if (!input || !output) {
     console.error('Usage: node tools/tga2png.mjs <input.tga> <output.png>');

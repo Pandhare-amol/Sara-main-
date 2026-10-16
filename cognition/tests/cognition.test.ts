@@ -247,17 +247,60 @@ test("skills require verification and improve only from recorded outcomes", asyn
     expectedOutcome: "Video file exists",
     verified: false,
   }));
+  await assert.rejects(() => skills.learn({
+    name: "export video",
+    description: "Export current edit",
+    steps: [{ id: "one", action: "Export with the chosen preset", tool: "clickText" }],
+    expectedOutcome: "Video file exists",
+    verified: true,
+  }), /evidence/);
   const learned = await skills.learn({
     name: "export video",
     description: "Export current edit",
     steps: [{ id: "one", action: "Export with the chosen preset", tool: "clickText" }],
     expectedOutcome: "Video file exists",
     verified: true,
+    tests: ["Confirm the exported file exists and opens"],
+    verificationEvidence: [{ kind: "demonstration", passed: true, summary: "Exported test clip opened successfully.", reference: "task:test-export" }],
   });
+  assert.equal(learned.status, "verified");
+  assert.equal(learned.version, 1);
   const improved = await skills.recordOutcome(learned.id, true);
   assert.equal(improved.uses, 1);
   assert.equal(improved.successRate, 1);
   assert.ok(improved.confidence > learned.confidence);
+});
+
+test("skill proposals stay unavailable until evidence and verified versions can roll back", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "myraa-skill-version-test-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const skills = new SkillManager(path.join(dir, "skills.json"));
+  await skills.initialize();
+  const proposal = await skills.propose({
+    name: "format report",
+    description: "Create the standard report",
+    steps: [{ id: "one", action: "Create report v1" }],
+    expectedOutcome: "Report exists",
+    tests: ["Open generated report"],
+  });
+  assert.equal(proposal.status, "pending_review");
+  assert.equal(skills.find("format report"), null);
+  const verified = await skills.verify(proposal.id, [{ kind: "automated_test", passed: true, summary: "Fixture report opened.", outputHash: "sha256:test" }]);
+  assert.equal(verified.version, 2);
+  assert.equal(skills.find("format report")?.id, proposal.id);
+  const updated = await skills.learn({
+    name: "format report",
+    description: "Create the revised standard report",
+    steps: [{ id: "one", action: "Create report v2" }],
+    expectedOutcome: "Revised report exists",
+    verified: true,
+    verificationEvidence: [{ kind: "demonstration", passed: true, summary: "Reviewed revised output." }],
+  });
+  assert.equal(updated.version, 3);
+  const rolledBack = await skills.rollback(proposal.id, 2);
+  assert.equal(rolledBack.version, 4);
+  assert.equal(rolledBack.steps[0].action, "Create report v1");
+  assert.equal(rolledBack.versions.at(-1)?.rolledBackFromVersion, 2);
 });
 
 test("critic never treats confirmation or structured failure as success", () => {

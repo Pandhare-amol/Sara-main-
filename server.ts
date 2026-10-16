@@ -6,8 +6,6 @@ import { GoogleGenAI, Modality, Type, LiveServerMessage } from "@google/genai";
 import dotenv from "dotenv";
 import * as fs from "fs";
 import { randomUUID } from "node:crypto";
-import dns from "node:dns/promises";
-import net from "node:net";
 import { execFileSync, spawn } from "node:child_process";
 import { 
   loadMemories, 
@@ -43,7 +41,6 @@ import {
 } from "./cognition";
 import { MyraaRuntime } from "./runtime/myraaRuntime";
 import { setConsolidationGenerator } from "./server_memory";
-import { assertSafeExternalUrl } from "./shared/netSafety";
 import * as nativeWin32 from "./native/win32";
 import { LIVE_AGENT_TOOL_DECLARATIONS, LIVE_AGENT_INSTRUCTIONS, LIVE_AGENT_TOOL_NAMES, handleLiveAgentTool } from "./voice/liveAgentTools";
 
@@ -102,6 +99,24 @@ function appendLog(fileName: string, message: string): void {
 const logCommand = (m: string) => appendLog("commands.log", m);
 const logStartup = (m: string) => appendLog("startup.log", m);
 const logError = (m: string) => appendLog("errors.log", m);
+
+function isLoopbackHost(host: string): boolean {
+  return /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host.trim());
+}
+
+/** Browser requests and WebSockets must come from this exact local origin. */
+function isTrustedLocalOrigin(origin: string, host: string): boolean {
+  if (!origin) return true; // Electron main process and other non-browser local clients.
+  if (!isLoopbackHost(host)) return false;
+  try {
+    const parsed = new URL(origin);
+    return ["http:", "https:"].includes(parsed.protocol)
+      && isLoopbackHost(parsed.host)
+      && parsed.host.toLowerCase() === host.trim().toLowerCase();
+  } catch {
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Crash guard. One stray rejected promise (a dropped socket, a model call that
@@ -722,9 +737,9 @@ async function startServer() {
   app.use((req, res, next) => {
     const host = String(req.headers.host || "");
     const origin = String(req.headers.origin || "");
-    const localHost = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host);
-    const localOrigin = !origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin) || origin === "null";
-    if (!localHost || !localOrigin) return res.status(403).json({ error: "MYRAA only accepts local requests." });
+    if (!isLoopbackHost(host) || !isTrustedLocalOrigin(origin, host)) {
+      return res.status(403).json({ error: "MYRAA only accepts same-origin local requests." });
+    }
     next();
   });
   runtime.registerRoutes(app);
@@ -1135,6 +1150,56 @@ async function startServer() {
     }
   });
 
+  app.post("/api/skills/proposals", async (req, res) => {
+    if (!cognition.config.skillLearningEnabled) {
+      return res.status(403).json({ error: "Skill learning is disabled by feature flag." });
+    }
+    try {
+      const skill = await cognition.skills.propose(req.body || {});
+      res.status(201).json(skill);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/skills/:skillId/verify", async (req, res) => {
+    try {
+      const skill = await cognition.skills.verify(req.params.skillId, req.body?.verificationEvidence, req.body?.revalidateAfter);
+      await processCognitiveEvent({
+        type: "memory.new_skill_learned",
+        source: "memory",
+        importance: 0.72,
+        projectId: skill.projectId || undefined,
+        metadata: { skillId: skill.id, text: skill.description, version: skill.version },
+      });
+      res.json(skill);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/skills/:skillId/rollback", async (req, res) => {
+    try {
+      const skill = await cognition.skills.rollback(req.params.skillId, Number(req.body?.version));
+      res.json(skill);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/skills/:skillId/status", async (req, res) => {
+    try {
+      if (req.body?.status !== "outdated" && req.body?.status !== "disabled") throw new Error("status must be outdated or disabled.");
+      res.json(await cognition.skills.setStatus(req.params.skillId, req.body.status));
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.delete("/api/skills/:skillId", async (req, res) => {
+    res.json({ deleted: await cognition.skills.delete(req.params.skillId) });
+  });
+
   app.post("/api/skills/:skillId/outcome", async (req, res) => {
     try {
       const skill = await cognition.skills.recordOutcome(req.params.skillId, req.body?.succeeded === true);
@@ -1422,316 +1487,10 @@ async function startServer() {
     }
   });
 
-  // Safe Server-Side Scraper & HTML Proxy endpoint
-  app.get("/api/proxy", async (req, res) => {
-    try {
-      const url = req.query.url as string;
-      if (!url) {
-        return res.status(400).json({ error: "Missing 'url' parameter." });
-      }
-      await assertSafeExternalUrl(url);
+  // Websites are opened only in the user's real default browser. Historical
+  // same-origin HTML/scraping proxy routes were removed: serving remote scripts
+  // from localhost would give untrusted pages access to Sara's private local API.
 
-      console.log(`[Proxy Scraper] Fetching external content for: ${url}`);
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`Scraper failed to load page: status ${response.status}`);
-      }
-
-      const html = await response.text();
-
-      // Simple regex-based HTML parsers for standard items
-      const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-      const title = titleMatch ? titleMatch[1].trim() : "";
-
-      // Extract high-level headings (h1, h2, h3)
-      const headings: string[] = [];
-      const headingMatches = html.matchAll(/<h([1-3])\b[^>]*>(.*?)<\/h\1>/gi);
-      for (const match of headingMatches) {
-        const text = match[2].replace(/<[^>]*>/g, "").trim();
-        if (text && text.length > 3 && text.length < 120 && !headings.includes(text)) {
-          headings.push(text);
-        }
-      }
-
-      // Extract organic anchor links
-      const links: { text: string; href: string }[] = [];
-      const linkMatches = html.matchAll(/<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi);
-      for (const match of linkMatches) {
-        let href = match[1].trim();
-        const text = match[2].replace(/<[^>]*>/g, "").trim();
-        
-        if (text && text.length > 2 && text.length < 100) {
-          if (href.startsWith("/")) {
-            try {
-              const u = new URL(url);
-              href = `${u.protocol}//${u.host}${href}`;
-            } catch {}
-          }
-          if (href.startsWith("http://") || href.startsWith("https://")) {
-            links.push({ text, href });
-          }
-        }
-      }
-
-      // Extract general copy paragraphs
-      const paragraphs: string[] = [];
-      const paragraphMatches = html.matchAll(/<p\b[^>]*>(.*?)<\/p>/gi);
-      for (const match of paragraphMatches) {
-        const text = match[1].replace(/<[^>]*>/g, "").trim();
-        if (text && text.length > 25 && text.length < 600 && !paragraphs.includes(text)) {
-          paragraphs.push(text);
-        }
-      }
-
-      // Extract button elements
-      const buttons: string[] = [];
-      const buttonMatches = html.matchAll(/<button\b[^>]*>(.*?)<\/button>/gi);
-      for (const match of buttonMatches) {
-        const text = match[1].replace(/<[^>]*>/g, "").trim();
-        if (text && text.length > 1 && text.length < 60 && !buttons.includes(text)) {
-          buttons.push(text);
-        }
-      }
-
-      res.json({
-        url,
-        title,
-        headings: headings.slice(0, 15),
-        links: links.filter(l => !l.href.includes("javascript:")).slice(0, 30),
-        buttons: buttons.slice(0, 15),
-        paragraphs: paragraphs.slice(0, 12)
-      });
-
-    } catch (err: any) {
-      console.error(`[Proxy Scraper] Error fetching ${req.query.url}:`, err.message);
-      res.status(500).json({ error: `Scraper error: ${err.message}` });
-    }
-  });
-
-  // High-fidelity fully functional HTML Proxy which circumvents CSP and X-Frame-Options
-  app.get("/api/web-proxy", async (req, res) => {
-    let targetUrl = "";
-    try {
-      const urlParam = req.query.url as string;
-      if (!urlParam) {
-        return res.status(400).send("Myraa Web Proxy Error: Missing target 'url' parameter");
-      }
-
-      targetUrl = urlParam.trim();
-      
-      // Prevent relative paths from requesting on same-origin
-      if (targetUrl.startsWith("/")) {
-        return res.status(400).send(`Myraa Web Proxy Error: Relative paths are not supported directly (${targetUrl}).`);
-      }
-
-      // Check protocol and hostname format
-      try {
-        if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
-          targetUrl = "https://" + targetUrl;
-        }
-        const parsed = new URL(targetUrl);
-        if (!parsed.hostname || !parsed.hostname.includes(".")) {
-          throw new Error("Missing or invalid domain name extension (e.g. .com, .org, .net).");
-        }
-        await assertSafeExternalUrl(parsed.toString());
-      } catch (err: any) {
-        return res.status(400).send(`Myraa Web Proxy Error: Invalid URL specified: "${urlParam}". Make sure you enter a valid domain name.`);
-      }
-
-      console.log(`[Web Proxy] Routing connection through proxy: ${targetUrl}`);
-      
-      let response;
-      try {
-        response = await fetch(targetUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
-          }
-        });
-      } catch (fetchErr: any) {
-        console.warn(`[Web Proxy Failed Fetch] Target: ${targetUrl} Error:`, fetchErr.message);
-        return res.status(502).send(`Myraa Web Proxy Error: Unable to fetch the website "${targetUrl}". The site might be offline, or the URL address is spelled incorrectly. Details: ${fetchErr.message}`);
-      }
-
-      if (!response.ok) {
-        return res.status(response.status).send(`Myraa Web Proxy Error: Failed loading remote website. Server returned status: ${response.status} (${response.statusText})`);
-      }
-
-      const contentType = response.headers.get("content-type") || "";
-      
-      // If it is not HTML (e.g. stylesheet, script, or image loaded directly), proxy it as binary
-      if (!contentType.includes("text/html")) {
-        const arrayBuffer = await response.arrayBuffer();
-        res.setHeader("Content-Type", contentType);
-        return res.send(Buffer.from(arrayBuffer));
-      }
-
-      let htmlContents = await response.text();
-
-      // Inject base tag to resolve relative paths and direct parent communication scripts
-      const baseUrlTag = `<base href="${targetUrl}" />`;
-      const interceptorScript = `
-        <script>
-          (function() {
-            // Hijack link interactions safely
-            document.addEventListener('click', function(e) {
-              var anchor = e.target.closest('a');
-              if (anchor) {
-                var href = anchor.getAttribute('href');
-                if (href && !href.startsWith('#') && !href.startsWith('javascript:')) {
-                  e.preventDefault();
-                  try {
-                    var resolvedUrl = new URL(href, window.location.href).href;
-                    window.parent.postMessage({ type: 'NAVIGATE', url: resolvedUrl }, '*');
-                  } catch (err) {
-                    console.error("[Proxy Interceptor] Failed resolving link:", err);
-                  }
-                }
-              }
-            }, true);
-
-            // Hijack search form submits
-            document.addEventListener('submit', function(e) {
-              var form = e.target;
-              if (form) {
-                e.preventDefault();
-                try {
-                  var formData = new FormData(form);
-                  var params = new URLSearchParams();
-                  formData.forEach(function(value, key) {
-                    if (typeof value === 'string') {
-                      params.append(key, value);
-                    }
-                  });
-                  var actionAttr = form.getAttribute('action') || '';
-                  var actionUrl = new URL(actionAttr, window.location.href).href;
-                  if (form.method.toLowerCase() === 'get') {
-                    actionUrl += (actionUrl.indexOf('?') !== -1 ? '&' : '?') + params.toString();
-                  }
-                  window.parent.postMessage({ type: 'NAVIGATE', url: actionUrl }, '*');
-                } catch (err) {
-                  console.error("[Proxy Interceptor] Failed submitting form:", err);
-                }
-              }
-            }, true);
-
-            // Neutralize parent context locks (frame-busters)
-            window.alert = function(msg) { console.log("[Myraa Browser alert bypassed]:", msg); };
-            window.confirm = function(msg) { console.log("[Myraa Browser confirm bypassed]:", msg); return true; };
-            window.open = function(url) { window.parent.postMessage({ type: 'NAVIGATE', url: url }, '*'); return null; };
-          })();
-        </script>
-      `;
-
-      // Inject into <head> or prepend
-      if (htmlContents.includes("<head>")) {
-        htmlContents = htmlContents.replace("<head>", `<head>\n${baseUrlTag}\n${interceptorScript}`);
-      } else if (htmlContents.includes("<HEAD>")) {
-        htmlContents = htmlContents.replace("<HEAD>", `<HEAD>\n${baseUrlTag}\n${interceptorScript}`);
-      } else {
-        htmlContents = baseUrlTag + "\n" + interceptorScript + "\n" + htmlContents;
-      }
-
-      // Neutralize security headers to allow displaying in an iframe on same-origin
-      res.setHeader("Content-Type", "text/html");
-      res.setHeader("X-Myraa-Proxied", "true");
-      res.removeHeader("X-Frame-Options");
-      res.removeHeader("Content-Security-Policy");
-      res.removeHeader("content-security-policy");
-      res.removeHeader("x-frame-options");
-      
-      res.status(200).send(htmlContents);
-    } catch (e: any) {
-      console.warn("[Web Proxy Exception] Handled internal error:", e.message);
-      res.status(500).send(`Myraa Web Proxy Error: Internal error occurred proxying URL "${targetUrl || "unknown"}". Details: ${e.message}`);
-    }
-  });
-
-  // Real-time live YouTube search proxy endpoint
-  app.get("/api/youtube-search", async (req, res) => {
-    try {
-      const query = req.query.q as string;
-      if (!query) {
-        return res.status(400).json({ error: "Missing query q" });
-      }
-
-      console.log(`[YouTube Proxy Search] Searching real YouTube for: "${query}"`);
-      const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&hl=en&sp=EgIQAQ%253D%253D`;
-      const response = await fetch(searchUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-        }
-      });
-      const html = await response.text();
-
-      const videoList: any[] = [];
-      const jsonMatch = html.match(/ytInitialData\s*=\s*({.+?});/);
-      
-      if (jsonMatch) {
-        try {
-          const data = JSON.parse(jsonMatch[1]);
-          const contents = data.contents?.twoColumnSearchResultRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents;
-          if (contents && Array.isArray(contents)) {
-            for (const item of contents) {
-              if (item.videoRenderer) {
-                const vr = item.videoRenderer;
-                const vId = vr.videoId;
-                if (vId) {
-                  videoList.push({
-                    videoId: vId,
-                    title: vr.title?.runs?.[0]?.text || vr.title?.simpleText || "YouTube Video",
-                    thumbnail: `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`,
-                    author: vr.ownerText?.runs?.[0]?.text || vr.shortBylineText?.runs?.[0]?.text || "Unknown Channel",
-                    duration: vr.lengthText?.simpleText || "N/A",
-                    views: vr.viewCountText?.simpleText || "N/A",
-                    published: vr.publishedTimeText?.simpleText || ""
-                  });
-                }
-              }
-            }
-          }
-        } catch (e: any) {
-          console.error("[YouTube Parser Engine] JSON parse error, falling back:", e.message);
-        }
-      }
-
-      // Regex fallback if JSON extraction gets blocked or is empty
-      if (videoList.length === 0) {
-        const videoRegex = /"videoId":"([^"]+)"/g;
-        let match;
-        const ids: string[] = [];
-        while ((match = videoRegex.exec(html)) !== null && ids.length < 15) {
-          const id = match[1];
-          if (id && !ids.includes(id)) {
-            ids.push(id);
-          }
-        }
-
-        for (const id of ids) {
-          videoList.push({
-            videoId: id,
-            title: `Live Stream: ${id}`,
-            thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-            author: "YouTube Creator",
-            duration: "N/A",
-            views: "Available Now"
-          });
-        }
-      }
-
-      res.setHeader("Cache-Control", "public, max-age=60");
-      res.status(200).json({ results: videoList.slice(0, 15) });
-    } catch (err: any) {
-      console.error("[YouTube Search Error]:", err.message);
-      res.status(500).json({ error: err.message, results: [] });
-    }
-  });
-  
   // Custom server running with http.createServer so we can upgrade for WebSocket on port 3000
   const server = http.createServer(app);
   
@@ -1746,8 +1505,7 @@ async function startServer() {
     // user's browser must never be able to listen in or drive the session.
     const origin = String(request.headers.origin || "");
     const host = String(request.headers.host || "");
-    const localOrigin = !origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
-    if (!localOrigin || !/^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host)) {
+    if (!isLoopbackHost(host) || !isTrustedLocalOrigin(origin, host)) {
       socket.destroy();
       return;
     }
@@ -3262,6 +3020,12 @@ async function startServer() {
     }
   });
 
+  // Unknown API paths must be real 404s, not the SPA HTML shell with status
+  // 200. This also keeps removed legacy endpoints definitively unavailable.
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "API endpoint not found." });
+  });
+
   // Serve custom static assets folder
   app.use("/assets", express.static(path.join(process.cwd(), "assets")));
 
@@ -3295,16 +3059,33 @@ async function startServer() {
       .catch((e) => console.warn(`[Desktop Agent] Boot probe failed: ${e?.message || e}`));
   });
 
-  const shutdownCognition = () => {
+  let shuttingDown = false;
+  const shutdownServer = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     runtime.emergencyStop("shutdown");
-    runtime.shutdown();
+    const runtimeShutdown = runtime.shutdown().catch((error) => {
+      logError(`RUNTIME_SHUTDOWN_FAILED: ${error instanceof Error ? error.message : String(error)}`);
+    });
     desktopPerception.stop();
-    void cognition.shutdown().catch((error) =>
-      logError(`COGNITION_SHUTDOWN_FAILED: ${error instanceof Error ? error.message : String(error)}`),
-    );
+    for (const socket of wss.clients) socket.terminate();
+    for (const socket of eventsWss.clients) socket.terminate();
+    const cognitionShutdown = cognition.shutdown().catch((error) => {
+      logError(`COGNITION_SHUTDOWN_FAILED: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    const forceExit = setTimeout(() => {
+      logError(`SERVER_SHUTDOWN_TIMEOUT: ${signal}`);
+      process.exit(1);
+    }, 5_000);
+    server.close(async (error) => {
+      await Promise.all([cognitionShutdown, runtimeShutdown]);
+      clearTimeout(forceExit);
+      if (error) logError(`SERVER_CLOSE_FAILED: ${error.message}`);
+      process.exit(error ? 1 : 0);
+    });
   };
-  process.once("SIGTERM", shutdownCognition);
-  process.once("SIGINT", shutdownCognition);
+  process.once("SIGTERM", () => shutdownServer("SIGTERM"));
+  process.once("SIGINT", () => shutdownServer("SIGINT"));
 }
 
 function legacyCategoryForKind(kind: MemoryKind): Memory["category"] {
@@ -3320,8 +3101,6 @@ function legacyCategoryForKind(kind: MemoryKind): Memory["category"] {
       return "identity";
   }
 }
-
-// assertSafeExternalUrl / isPrivateAddress now live in shared/netSafety.ts.
 
 function classifyUserEventType(text: string): string {
   const normalized = text.trim().toLowerCase();

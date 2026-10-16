@@ -32,6 +32,8 @@ interface Pending {
   request: ConfirmationRequest;
   resolve: (answer: ConfirmationAnswer) => void;
   timer: NodeJS.Timeout;
+  signal?: AbortSignal;
+  abortListener?: () => void;
 }
 
 export class ConfirmationBroker {
@@ -50,12 +52,25 @@ export class ConfirmationBroker {
       expiresAt: new Date(created + timeoutMs).toISOString(),
     };
     const answer = new Promise<ConfirmationAnswer>((resolve) => {
+      // This timer intentionally remains referenced. A confirmation promise
+      // guarantees an answer by expiresAt; unref() allowed a short-lived
+      // caller (including the test runner) to exit with the promise pending.
       const timer = setTimeout(() => this.resolve(request.id, { approved: false, via: "timeout" }), timeoutMs);
-      timer.unref?.();
-      this.pending.set(request.id, { request, resolve, timer });
-      options.signal?.addEventListener("abort", () => this.resolve(request.id, { approved: false, via: "cancel" }), { once: true });
+      const abortListener = options.signal
+        ? () => this.resolve(request.id, { approved: false, via: "cancel" })
+        : undefined;
+      this.pending.set(request.id, { request, resolve, timer, signal: options.signal, abortListener });
+      if (abortListener && !options.signal!.aborted) {
+        options.signal!.addEventListener("abort", abortListener, { once: true });
+      }
     });
     appEvents.publish("confirmation.requested", request);
+    // addEventListener does not fire for a signal that was already aborted.
+    // Resolve only after publishing so event consumers always observe the
+    // request before its cancellation.
+    if (options.signal?.aborted) {
+      this.resolve(request.id, { approved: false, via: "cancel" });
+    }
     return { request, answer };
   }
 
@@ -64,6 +79,9 @@ export class ConfirmationBroker {
     if (!pending) return false;
     this.pending.delete(id);
     clearTimeout(pending.timer);
+    if (pending.signal && pending.abortListener) {
+      pending.signal.removeEventListener("abort", pending.abortListener);
+    }
     pending.resolve(answer);
     appEvents.publish("confirmation.resolved", { id, approved: answer.approved, via: answer.via, taskId: pending.request.taskId });
     return true;
