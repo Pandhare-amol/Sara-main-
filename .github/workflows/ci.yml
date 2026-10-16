@@ -47,8 +47,23 @@ jobs:
       - name: Cognition manager tests
         run: node --import tsx --test cognition/tests/cognition.test.ts
 
-      - name: API hub tests
-        run: npm run test:api-hub
+      - name: API hub importer test
+        run: node --import tsx --test --test-name-pattern="public-apis importer" api_hub/tests/apiHub.test.ts
+
+      - name: API hub registry test
+        run: node --import tsx --test --test-name-pattern="capability registry" api_hub/tests/apiHub.test.ts
+
+      - name: API hub sync test
+        run: node --import tsx --test --test-name-pattern="API hub sync" api_hub/tests/apiHub.test.ts
+
+      - name: API hub adapter policy test
+        run: node --import tsx --test --test-name-pattern="adapter registry" api_hub/tests/apiHub.test.ts
+
+      - name: API hub execution test
+        run: node --import tsx --test --test-name-pattern="verified declarative" api_hub/tests/apiHub.test.ts
+
+      - name: API hub built-in test
+        run: node --import tsx --test --test-name-pattern="built-in adapters" api_hub/tests/apiHub.test.ts
 
       - name: Screen vision tests
         run: npm run test:screen-vision
