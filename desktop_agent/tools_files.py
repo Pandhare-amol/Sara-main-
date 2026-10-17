@@ -38,6 +38,14 @@ SAFE_ROOTS: List[Path] = [
 ]
 
 # Friendly folder aliases -> resolved path.
+# createFile is a UTF-8 text primitive, not a binary artifact generator.
+# Rejecting these extensions prevents a planner/provider from fabricating a
+# corrupt image, PDF or Office package that merely contains text bytes.
+_BINARY_ARTIFACT_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".ico",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+}
+
 FOLDER_ALIASES: Dict[str, Path] = {
     "desktop": HOME / "Desktop",
     "documents": HOME / "Documents",
@@ -96,6 +104,11 @@ def create_file(args: Dict[str, Any]) -> Dict[str, Any]:
     overwrite = bool(args.get("overwrite", False))
     p = _resolve_file(path)
     _ensure_safe(p)
+    if p.suffix.casefold() in _BINARY_ARTIFACT_EXTENSIONS:
+        raise ToolError(
+            f"createFile writes UTF-8 text and cannot create a real {p.suffix} artifact. "
+            "Use the configured image, report, or Microsoft Office generator instead."
+        )
 
     if p.exists() and not overwrite:
         raise ToolError(

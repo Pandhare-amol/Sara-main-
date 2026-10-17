@@ -20,6 +20,8 @@ pygetwindow==0.0.9
 pywinauto==0.6.9
 winrt-runtime==3.2.1
 winrt-Windows.Media.Ocr==3.2.1
+# Official Windows System Media Transport Controls for verified browser-player state.
+winrt-Windows.Media.Control==3.2.1
 winrt-Windows.Graphics.Imaging==3.2.1
 winrt-Windows.Storage.Streams==3.2.1
 winrt-Windows.Globalization==3.2.1

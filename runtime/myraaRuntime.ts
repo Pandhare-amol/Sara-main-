@@ -137,6 +137,31 @@ export class MyraaRuntime {
       remember: (fact, kind) => options.remember(fact, kind === "preference" ? "preference" : "semantic", 0.7),
       notify: (title, body) => this.notify(title, body),
       createWordReport: (request, signal) => this.reports.createWord(request, { signal }),
+      contentCapabilities: () => {
+        const catalogue = this.registry.publicCatalogue();
+        const providers = catalogue.providers
+          .filter((provider) => provider.enabled && provider.configured)
+          .map((provider) => ({ id: provider.id, name: provider.displayName, apiType: provider.apiType, locality: provider.locality }));
+        return {
+          gateway: "existing provider-neutral ModelRouter",
+          textAndCode: {
+            configured: providers.length > 0,
+            providers,
+            note: "Used by planning/content drafting; provider availability is still verified per request.",
+          },
+          imageOutput: {
+            configured: false,
+            reason: "The current provider contract supports text output and image input/vision, but has no authorized image-output modality or image-generation adapter.",
+            setupNeeded: "Configure an authorized image-output adapter in the existing provider gateway before requesting PNG/JPEG generation. No placeholder image will be fabricated.",
+          },
+          codeTesting: {
+            sandboxed: false,
+            permissionedCommandRunner: true,
+            reason: "shell.run is timeout/output-bounded and approval-gated, but it is not an OS/container security sandbox.",
+            setupNeeded: "Configure an isolated disposable container or Windows Sandbox runner before claiming untrusted generated code was sandbox-tested.",
+          },
+        };
+      },
       conflictWaitMs: this.currentSettings.autonomy.conflictWaitSec * 1000,
     });
     this.manager = new TaskManager({

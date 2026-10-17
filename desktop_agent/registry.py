@@ -34,6 +34,10 @@ class State:
         # Confirmation tokens for dangerous (power) actions.
         # token -> {"action": <tool_name>, "expires": <epoch>}
         self.confirmations: Dict[str, Dict[str, Any]] = {}
+        # The YouTube adapter keeps only verified browser/player metadata and a
+        # cancellation flag; no page content, credentials or engagement data.
+        self.youtube: Dict[str, Any] = {}
+        self.youtube_cancel = threading.Event()
 
 
 STATE = State()
@@ -61,6 +65,11 @@ DESKTOP_TOOL_NAMES = [
     "openWebsite",
     "searchWeb",
     "searchYouTube",
+    # verified, active-tab-isolated YouTube playback adapter
+    "youtubePlay",
+    "youtubeControl",
+    "youtubeState",
+    "youtubeCancel",
     "searchGoogle",
     "searchGitHub",
     # files
@@ -176,6 +185,7 @@ _MODULE_NAMES = [
     "tools_applications",
     "tools_websites",
     "tools_search",
+    "tools_youtube",
     "tools_files",
     "tools_pc",
     "tools_windows",

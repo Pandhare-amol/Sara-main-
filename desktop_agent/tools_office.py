@@ -25,6 +25,9 @@ from .tools_files import _ensure_safe, _resolve_file
 _PROGIDS = {"word": "Word.Application", "excel": "Excel.Application", "powerpoint": "PowerPoint.Application"}
 _MAX_EDIT_FILE_BYTES = 200 * 1024 * 1024
 _CELL_ADDRESS = re.compile(r"^([A-Z]{1,3})([1-9][0-9]{0,6})$")
+_CELL_RANGE = re.compile(r"^([A-Z]{1,3}[1-9][0-9]{0,6}):([A-Z]{1,3}[1-9][0-9]{0,6})$")
+_SAFE_FORMULA_FUNCTIONS = {"SUM", "AVERAGE", "MIN", "MAX", "COUNT", "COUNTA", "ROUND", "IF", "AND", "OR", "ABS", "SQRT"}
+_CHART_TYPES = {"column": 51, "bar": 57, "line": 4, "pie": 5}  # Excel XlChartType values
 
 
 def _require_windows() -> None:
@@ -77,6 +80,52 @@ def _destination(value: Any, extension: str) -> Path:
         raise ToolError(f"Destination already exists: {path}. Choose a new path; Office tools never overwrite silently.")
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _safe_formula(value: Any) -> str:
+    formula = str(value or "").strip()
+    if not formula.startswith("=") or len(formula) > 1_000:
+        raise ToolError("Each workbook formula must start with '=' and be at most 1,000 characters.")
+    upper = formula.upper()
+    if any(marker in upper for marker in ("[", "]", "HTTP:", "HTTPS:", "WEBSERVICE", "FILTERXML", "HYPERLINK", "RTD", "DDE", "|", "!")):
+        raise ToolError("Workbook formulas cannot contain external workbook/sheet references, links, web/data functions or DDE syntax.")
+    if not re.fullmatch(r"=[A-Za-z0-9_().,:+\-*/^%$<>=\s]+", formula):
+        raise ToolError("Workbook formula contains unsupported characters. Use local arithmetic, cell/range references and approved functions only.")
+    functions = {name.upper() for name in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", formula)}
+    unsupported = sorted(functions - _SAFE_FORMULA_FUNCTIONS)
+    if unsupported:
+        raise ToolError(f"Workbook formula uses unsupported function(s): {', '.join(unsupported)}.")
+    return formula
+
+
+def _validate_pdf(source: Path) -> None:
+    try:
+        if source.stat().st_size < 16:
+            raise ToolError("PDF export is unexpectedly small.")
+        with source.open("rb") as handle:
+            header = handle.read(8)
+            handle.seek(max(0, source.stat().st_size - 2048))
+            tail = handle.read()
+        if not header.startswith(b"%PDF-") or b"%%EOF" not in tail:
+            raise ToolError("Office produced a file that does not have a valid PDF signature/end marker.")
+    except OSError as exc:
+        raise ToolError("The exported PDF could not be read back for integrity verification.") from exc
+
+
+def _validated_image(value: Any) -> Path:
+    source = _resolve_file(value, must_exist=True)
+    _ensure_safe(source, False)
+    if source.suffix.casefold() not in {".png", ".jpg", ".jpeg", ".gif", ".bmp"}:
+        raise ToolError("PowerPoint slide images must be local PNG, JPEG, GIF or BMP files.")
+    if not source.is_file() or source.stat().st_size <= 0 or source.stat().st_size > 50 * 1024 * 1024:
+        raise ToolError("PowerPoint slide image must be a non-empty local file no larger than 50 MB.")
+    try:
+        from PIL import Image
+        with Image.open(source) as image:
+            image.verify()
+    except Exception as exc:
+        raise ToolError(f"PowerPoint slide image is unreadable or corrupt: {source}") from exc
+    return source
 
 
 def _validate_open_xml(source: Path) -> None:
@@ -233,10 +282,18 @@ def _close_item(kind: str, item: Any, app: Any) -> None:
 def _verified(path: Path, kind: str, detail: Dict[str, Any]) -> Dict[str, Any]:
     if not path.is_file() or path.stat().st_size <= 0:
         raise ToolError(f"Office reported success but {path.name} was not created correctly.")
+    if path.suffix.casefold() in {".docx", ".xlsx", ".pptx"}:
+        _validate_open_xml(path)
+        verification = "file_exists_nonempty_and_valid_open_xml"
+    elif path.suffix.casefold() == ".pdf":
+        _validate_pdf(path)
+        verification = "file_exists_nonempty_and_valid_pdf_signature"
+    else:
+        verification = "file_exists_and_nonempty"
     return {
         "result": f"Created and verified {path.name} in Microsoft {kind.title()}.",
-        "path": str(path), "size": path.stat().st_size, "application": kind,
-        "verified": True, "verification": "file_exists_and_nonempty", **detail,
+        "path": str(path), "size": path.stat().st_size, "sha256": _sha256(path), "application": kind,
+        "verified": True, "verification": verification, **detail,
     }
 
 
@@ -287,10 +344,45 @@ def office_create_word(args: Dict[str, Any]) -> Dict[str, Any]:
 def office_create_workbook(args: Dict[str, Any]) -> Dict[str, Any]:
     destination = _destination(args.get("path"), ".xlsx")
     rows = args.get("rows") or []
+    formulas = args.get("formulas") or []
+    charts = args.get("charts") or []
     if not isinstance(rows, list) or any(not isinstance(row, list) for row in rows):
         raise ToolError("rows must be a two-dimensional array.")
     if len(rows) > 10_000 or sum(len(row) for row in rows) > 100_000:
         raise ToolError("Workbook data exceeds the 100,000 cell safety limit.")
+    if not isinstance(formulas, list) or len(formulas) > 2_000 or any(not isinstance(item, dict) for item in formulas):
+        raise ToolError("formulas must be an array with at most 2,000 explicit formula cells.")
+    if not isinstance(charts, list) or len(charts) > 20 or any(not isinstance(item, dict) for item in charts):
+        raise ToolError("charts must be an array with at most 20 chart definitions.")
+    normalized_formulas: List[Dict[str, str]] = []
+    seen_formula_cells: set[str] = set()
+    for item in formulas:
+        cell = str(item.get("cell") or "").strip().upper()
+        if not _CELL_ADDRESS.fullmatch(cell) or cell in seen_formula_cells:
+            raise ToolError(f"Formula cell must be one unique A1 address: {cell or '(missing)' }.")
+        seen_formula_cells.add(cell)
+        normalized_formulas.append({
+            "cell": cell,
+            "formula": _safe_formula(item.get("formula")),
+            "number_format": str(item.get("number_format") or "").strip()[:80],
+        })
+    normalized_charts: List[Dict[str, Any]] = []
+    for item in charts:
+        chart_type = str(item.get("type") or "column").strip().casefold()
+        source_range = str(item.get("source_range") or "").strip().upper()
+        anchor = str(item.get("anchor_cell") or "F2").strip().upper()
+        if chart_type not in _CHART_TYPES:
+            raise ToolError("Chart type must be column, bar, line or pie.")
+        if not _CELL_RANGE.fullmatch(source_range):
+            raise ToolError(f"Chart source_range must be one local A1 range such as A1:B6: {source_range or '(missing)' }.")
+        if not _CELL_ADDRESS.fullmatch(anchor):
+            raise ToolError(f"Chart anchor_cell must be one A1 address: {anchor}.")
+        normalized_charts.append({
+            "type": chart_type,
+            "source_range": source_range,
+            "anchor_cell": anchor,
+            "title": str(item.get("title") or "")[:300],
+        })
     app = _dispatch("excel")
     workbook = None
     try:
@@ -301,22 +393,58 @@ def office_create_workbook(args: Dict[str, Any]) -> Dict[str, Any]:
             sheet.Name = name
         for row_index, row in enumerate(rows, 1):
             for column_index, value in enumerate(row, 1):
-                # Values only: formulas are always treated as plain text to
-                # prevent CSV/formula injection and external-data functions.
+                # Ordinary values are always values. Formula execution is
+                # available only through the separately validated formulas
+                # array so imported/user data cannot become executable cells.
                 if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
                     value = "'" + value
                 sheet.Cells(row_index, column_index).Value = value
         if args.get("header") and rows:
             sheet.Range(sheet.Cells(1, 1), sheet.Cells(1, len(rows[0]))).Font.Bold = True
+        for formula in normalized_formulas:
+            target = sheet.Range(formula["cell"])
+            target.Formula = formula["formula"]
+            if formula["number_format"]:
+                target.NumberFormat = formula["number_format"]
+        try:
+            app.CalculateFull()
+        except Exception:
+            try:
+                workbook.Application.Calculate()
+            except Exception:
+                pass
+        formula_results: List[Dict[str, Any]] = []
+        for formula in normalized_formulas:
+            value = sheet.Range(formula["cell"]).Value
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ToolError(f"Formula {formula['cell']} produced a non-finite result.")
+            if isinstance(value, str) and value.startswith("#"):
+                raise ToolError(f"Formula {formula['cell']} produced Excel error {value}.")
+            formula_results.append({"cell": formula["cell"], "formula": formula["formula"], "value": value})
+        for chart in normalized_charts:
+            anchor = sheet.Range(chart["anchor_cell"])
+            chart_object = sheet.ChartObjects().Add(float(anchor.Left), float(anchor.Top), 480.0, 280.0)
+            excel_chart = chart_object.Chart
+            excel_chart.ChartType = _CHART_TYPES[chart["type"]]
+            excel_chart.SetSourceData(sheet.Range(chart["source_range"]))
+            if chart["title"]:
+                excel_chart.HasTitle = True
+                excel_chart.ChartTitle.Text = chart["title"]
         sheet.UsedRange.Columns.AutoFit()
         workbook.SaveAs(str(destination), FileFormat=51)  # xlOpenXMLWorkbook
         workbook.Saved = True
-        return _verified(destination, "excel", {"rows": len(rows), "cells": sum(len(row) for row in rows), "sheet": name})
+        return _verified(destination, "excel", {
+            "rows": len(rows), "cells": sum(len(row) for row in rows), "sheet": name,
+            "formulas": len(normalized_formulas), "formula_results": formula_results,
+            "charts": len(normalized_charts),
+        })
     except Exception as exc:
         try:
             if destination.exists(): destination.unlink()
         except OSError:
             pass
+        if isinstance(exc, ToolError):
+            raise
         raise ToolError(f"Microsoft Excel could not create the workbook: {exc}") from exc
     finally:
         if not destination.exists():
@@ -333,26 +461,61 @@ def office_create_presentation(args: Dict[str, Any]) -> Dict[str, Any]:
     slides = args.get("slides") or []
     if not isinstance(slides, list) or len(slides) > 200:
         raise ToolError("slides must be an array with at most 200 entries.")
+    normalized: List[Dict[str, Any]] = []
+    for index, item in enumerate(slides, 1):
+        if not isinstance(item, dict):
+            raise ToolError(f"Slide {index} must be an object with title and bullets.")
+        bullets = item.get("bullets") or []
+        if not isinstance(bullets, list) or len(bullets) > 50:
+            raise ToolError(f"Slide {index} bullets must be an array with at most 50 entries.")
+        image = _validated_image(item.get("image_path")) if item.get("image_path") else None
+        normalized.append({
+            "title": str(item.get("title") or "")[:500],
+            "bullets": [str(value)[:2_000] for value in bullets],
+            "image": image,
+        })
     app = _dispatch("powerpoint")
     presentation = None
     try:
         presentation = app.Presentations.Add()
-        for index, item in enumerate(slides, 1):
-            if not isinstance(item, dict):
-                raise ToolError(f"Slide {index} must be an object with title and bullets.")
-            title = str(item.get("title") or "")[:500]
-            bullets: List[str] = [str(value)[:2_000] for value in (item.get("bullets") or [])][:50]
-            slide = presentation.Slides.Add(index, 2)  # ppLayoutText
-            slide.Shapes.Title.TextFrame.TextRange.Text = title
-            slide.Shapes.Placeholders(2).TextFrame.TextRange.Text = "\r".join(bullets)
+        embedded_images = 0
+        for index, item in enumerate(normalized, 1):
+            slide = presentation.Slides.Add(index, 2)  # ppLayoutText: editable title + body
+            title_shape = slide.Shapes.Title
+            body_shape = slide.Shapes.Placeholders(2)
+            title_shape.TextFrame.TextRange.Text = item["title"]
+            body_shape.TextFrame.TextRange.Text = "\r".join(item["bullets"])
+            try:
+                title_shape.TextFrame.TextRange.Font.Size = 28
+                body_shape.TextFrame.TextRange.Font.Size = 18
+            except Exception:
+                pass
+            image = item["image"]
+            if image is not None:
+                # Keep both text and visual editable/embedded. The image is
+                # copied into the PPTX (LinkToFile=False, SaveWithDocument=True).
+                slide_width = float(presentation.PageSetup.SlideWidth)
+                slide_height = float(presentation.PageSetup.SlideHeight)
+                body_shape.Left = 36.0
+                body_shape.Width = slide_width * 0.46
+                body_shape.Top = 105.0
+                body_shape.Height = max(120.0, slide_height - 140.0)
+                slide.Shapes.AddPicture(
+                    str(image), False, True,
+                    slide_width * 0.54, 110.0,
+                    slide_width * 0.42, max(120.0, slide_height - 155.0),
+                )
+                embedded_images += 1
         presentation.SaveAs(str(destination), 24)  # ppSaveAsOpenXMLPresentation
         presentation.Saved = True
-        return _verified(destination, "powerpoint", {"slides": len(slides)})
+        return _verified(destination, "powerpoint", {"slides": len(slides), "embedded_images": embedded_images, "editable_text": True})
     except Exception as exc:
         try:
             if destination.exists(): destination.unlink()
         except OSError:
             pass
+        if isinstance(exc, ToolError):
+            raise
         raise ToolError(f"Microsoft PowerPoint could not create the presentation: {exc}") from exc
     finally:
         if not destination.exists():

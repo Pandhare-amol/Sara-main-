@@ -640,7 +640,11 @@ async function callDesktopAgent(
     // contents, file text, form fields, or confirmation tokens).
     logCommand(`EXECUTE ${tool} keys=[${Object.keys(args).join(",")}]`);
     const controller = new AbortController();
-    timer = setTimeout(() => controller.abort(), DESKTOP_AGENT_TIMEOUT);
+    // A verified YouTube search may wait for real browser navigation, result
+    // selection and a post-action media-state probe. Keep the ordinary desktop
+    // budget unchanged; only this bounded adapter gets a longer deadline.
+    const timeoutMs = tool.startsWith("youtube") ? 75_000 : DESKTOP_AGENT_TIMEOUT;
+    timer = setTimeout(() => controller.abort(), timeoutMs);
     abortFromOuter = () => controller.abort();
     outerSignal?.addEventListener("abort", abortFromOuter, { once: true });
 
@@ -1691,7 +1695,8 @@ async function startServer() {
         "- For exchange-rate or money-conversion questions, call convertCurrency directly. It uses MYRAA's verified no-key Frankfurter adapter; do not merely offer to Google the rate.",
         "- Every website and video must open only in the user's actual Windows default browser. Never create, mention, or simulate an embedded projector, sandbox browser, virtual browser, iframe browser, or separate automation browser.",
         "- A requested web search is one navigation action: call searchYouTube/searchGoogle/searchWeb directly and never call openWebsite first. These tools reuse the active default-browser tab, preventing blank or duplicate tabs.",
-        "- Control the visible Chrome/Edge/default-browser window with viewScreen/readScreen, clickText, typeText, pressKey, hotkey, and scroll. For a visible video, inspect a fresh frame, read the complete visible title, clickText that full title, and verify the result before reporting success.",
+        "- A YouTube request that asks to play must use playYouTube, not results-only searchYouTube and not guessed clicking. Player commands use controlYouTube, which is isolated to a verified active YouTube tab and reports synchronized state; system volume is not YouTube-player volume. Use searchYouTube only when the user explicitly wants search results without playback.",
+        "- For other browser interaction, control the visible Chrome/Edge/default-browser window with viewScreen/readScreen, clickText, typeText, pressKey, hotkey, and scroll. Inspect fresh state and verify the result before reporting success.",
         "- Never invent an API endpoint from a catalogue description. checkApiProvider checks documentation reachability only; actual calls require a verified declarative adapter.",
         "- Shared-screen frames are live visual context. Describe or react only to what is actually visible; never pretend you saw something that is absent.",
         "- Desktop control is permission-bound. Respect disabled permissions, confirmation gates, cancellation, and structured failures.",
@@ -1967,7 +1972,7 @@ async function startServer() {
                 },
                 {
                   name: "searchYouTube",
-                  description: "Search YouTube and open results in the default browser.",
+                  description: "Open YouTube search RESULTS only in the default browser. Never use when the user asked to play; use playYouTube for selection and verified playback.",
                   parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Search query." } }, required: ["query"] }
                 },
                 {
