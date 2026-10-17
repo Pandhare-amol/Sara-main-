@@ -74,6 +74,16 @@ export interface ExecutorDeps {
   audit: AuditLog;
   remember: (fact: string, kind: string) => Promise<void>;
   notify: (title: string, body: string) => void;
+  /** Cross-platform structured Word generation; execution still passes through OFFICE_WRITE approval. */
+  createWordReport?: (request: Record<string, unknown>, signal?: AbortSignal) => Promise<{
+    path: string;
+    title: string;
+    size: number;
+    sha256: string;
+    verified: true;
+    verification: string;
+    qa: { passed: boolean; checks: Array<{ id: string; status: string; detail: string }>; warnings: string[] };
+  }>;
   /** Seconds to wait for the user to stop using the mouse before yielding. */
   conflictWaitMs?: number;
 }
@@ -316,6 +326,19 @@ export class ActionExecutor {
     if (action.tool.startsWith("office.edit_")) {
       details.change = officeEditPreview(action);
       details.backup = "A timestamped backup will be created beside the original and hash-verified before the edit is saved.";
+    }
+    if (action.tool === "report.create_word") {
+      const sections = Array.isArray(action.args.sections) ? action.args.sections : [];
+      const sources = Array.isArray(action.args.sources) ? action.args.sources : [];
+      details.report = {
+        title: short(action.args.title, 120),
+        audience: short(action.args.audience, 120),
+        purpose: short(action.args.purpose, 200),
+        template: action.args.templateId || "generic-professional",
+        sections: sections.length,
+        sources: sources.length,
+      };
+      details.delivery = "Creates a new file only, validates the Open XML package and content, and records a SHA-256 manifest. Existing files are never overwritten.";
     }
     if (context.state?.activeWindow) details.window = context.state.activeWindow.title;
     const description = suspicious
@@ -615,6 +638,29 @@ export class ActionExecutor {
         const response = await call("openPath", { path: args.path, ...(definition.name === "fs.reveal" ? { select: true } : {}), ...(args.__executable ? { allow_executable: true } : {}) });
         if (!response.ok) return failed(response.error);
         return ok(`${definition.name === "fs.reveal" ? "Showed" : "Opened"} ${fileName(args.path)}`, undefined, { files: [{ path: String(args.path), change: "opened" }] });
+      }
+      case "report.create_word": {
+        if (!this.deps.createWordReport) return failed("Structured Word report generation is not configured.");
+        const generated = await this.deps.createWordReport(args, signal);
+        const verified = generated.verified === true && generated.qa?.passed === true && generated.size > 0;
+        return ok(`Created and verified ${fileName(generated.path)}`, {
+          path: generated.path,
+          title: generated.title,
+          size: generated.size,
+          sha256: generated.sha256,
+          verification: generated.verification,
+          qa: generated.qa,
+        }, {
+          files: [{ path: generated.path, change: "created", detail: "report.create_word" }],
+          verification: {
+            passed: verified,
+            evidence: verified
+              ? `${fileName(generated.path)} passed Open XML structure, content, citation and placeholder checks (${generated.size} bytes; SHA-256 ${generated.sha256.slice(0, 12)}…).`
+              : "The generated report did not pass deterministic delivery checks.",
+            method: "deterministic",
+          },
+          changesUi: false,
+        });
       }
       case "office.status": {
         const response = await call("officeStatus", {});

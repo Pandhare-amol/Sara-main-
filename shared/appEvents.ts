@@ -20,6 +20,7 @@ export type AppEventType =
   | "model.status"
   | "research.updated"
   | "knowledge.updated"
+  | "report.updated"
   | "notification"
   | "utility.fired"
   | "character.cue"

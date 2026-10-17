@@ -53,6 +53,9 @@ jobs:
       - name: Office action tests
         run: node --import tsx --test tests/officeActions.test.ts
 
+      - name: Structured report tests
+        run: node --import tsx --test tests/reporting.test.ts
+
       - name: Agent loop tests
         run: node --import tsx --test tests/agentLoop.test.ts
 

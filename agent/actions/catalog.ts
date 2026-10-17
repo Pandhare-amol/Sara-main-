@@ -97,6 +97,67 @@ export const ACTIONS: ActionDefinition[] = [
   { name: "fs.reveal", group: "files", description: "Show a file selected in File Explorer.", args: obj({ path: str("Path") }, ["path"]), capability: "LAUNCH_APP", resources: () => ["focus"], progress: (a) => `Showing ${fileName(a.path)}…`, batchable: true, changesUi: true },
 
   // ---- Microsoft Office -----------------------------------------------------------
+  { name: "report.create_word", group: "office", description: "Create a new professional .docx report without installed Word. sections use {id,heading,level?,paragraphs?:[{text,kind,evidenceIds?}],bullets?:[{text,kind,evidenceIds?,level?}],tables?:[{title,headers,rows,note?,evidenceIds?}]}; sources use {id,title,kind,location?}. Uses versioned templates and deterministic Open XML QA. Supply only authorized evidence; never invent facts, figures, quotations or citations; never overwrites; always asks.", args: obj({
+    path: str("New absolute local .docx path"),
+    title: str("Report title", { minLength: 1, maxLength: 500 }),
+    purpose: str("Decision or outcome the report supports", { minLength: 1, maxLength: 2000 }),
+    audience: str("Intended reader or decision-maker", { minLength: 1, maxLength: 500 }),
+    templateId: str("Versioned template", { enum: ["generic-professional", "business-proposal", "project-status", "technical-design", "research-brief", "sales-performance", "finance-review", "hr-people", "education-assessment", "manufacturing-operations", "support-service", "risk-compliance"] }),
+    scope: str("Included and excluded scope", { maxLength: 2000 }),
+    reportingPeriod: str("Period covered", { maxLength: 200 }),
+    documentDate: str("YYYY-MM-DD"),
+    author: str("Document author", { maxLength: 200 }),
+    version: str("Document version", { maxLength: 40 }),
+    language: str("BCP-47 language tag", { maxLength: 35 }),
+    confidentiality: str("Classification", { enum: ["public", "internal", "confidential", "restricted"] }),
+    sections: { type: "array", maxItems: 60, items: obj({
+      id: str("Stable section ID", { minLength: 1, maxLength: 80 }),
+      heading: str("Section heading", { minLength: 1, maxLength: 300 }),
+      level: num("Heading level", 1, 3),
+      paragraphs: { type: "array", maxItems: 500, items: obj({
+        text: str("Exact paragraph text; no placeholders", { minLength: 1, maxLength: 10000 }),
+        kind: str("Evidence status", { enum: ["fact", "analysis", "estimate", "assumption", "recommendation", "conclusion"] }),
+        evidenceIds: { type: "array", maxItems: 50, items: { type: "string", maxLength: 80 } },
+      }, ["text", "kind"]) },
+      bullets: { type: "array", maxItems: 500, items: obj({
+        text: str("Exact bullet text; no placeholders", { minLength: 1, maxLength: 10000 }),
+        kind: str("Evidence status", { enum: ["fact", "analysis", "estimate", "assumption", "recommendation", "conclusion"] }),
+        evidenceIds: { type: "array", maxItems: 50, items: { type: "string", maxLength: 80 } },
+        level: num("Bullet level", 0, 2),
+      }, ["text", "kind"]) },
+      tables: { type: "array", maxItems: 50, items: obj({
+        title: str("Table title", { minLength: 1, maxLength: 300 }),
+        headers: { type: "array", maxItems: 30, items: { type: "string", maxLength: 2000 } },
+        rows: { type: "array", maxItems: 2000, items: { type: "array", maxItems: 30, items: { type: "string", maxLength: 2000 } } },
+        note: str("Table note", { maxLength: 1000 }),
+        evidenceIds: { type: "array", maxItems: 50, items: { type: "string", maxLength: 80 } },
+      }, ["title", "headers", "rows"]) },
+    }, ["id", "heading"]) },
+    sources: { type: "array", maxItems: 200, items: obj({
+      id: str("Stable source ID used by evidenceIds", { minLength: 1, maxLength: 80 }),
+      title: str("Source title", { minLength: 1, maxLength: 500 }),
+      kind: str("Source kind", { enum: ["file", "web", "dataset", "interview", "user-provided", "system-record", "other"] }),
+      location: str("Authorized file path or HTTP(S) URL", { maxLength: 2000 }),
+      author: str("Source author", { maxLength: 300 }),
+      publisher: str("Publisher", { maxLength: 300 }),
+      publishedAt: str("Published date as supplied", { maxLength: 80 }),
+      accessedAt: str("Access date as supplied", { maxLength: 80 }),
+      note: str("Relevance or source limitation; no invented quotation", { maxLength: 1000 }),
+    }, ["id", "title", "kind"]) },
+    assumptions: { type: "array", maxItems: 100, items: { type: "string", maxLength: 2000 } },
+    limitations: { type: "array", maxItems: 100, items: { type: "string", maxLength: 2000 } },
+    requiredSections: { type: "array", maxItems: 30, items: { type: "string", maxLength: 200 } },
+    calculations: { type: "array", maxItems: 100, items: obj({
+      id: str("Stable calculation ID", { minLength: 1, maxLength: 80 }),
+      label: str("Calculation label", { minLength: 1, maxLength: 300 }),
+      operation: str("Deterministic operation", { enum: ["sum", "average", "difference", "ratio", "percentage_change"] }),
+      inputs: { type: "array", maxItems: 100, items: obj({ name: str("Input label", { minLength: 1, maxLength: 200 }), value: num("Finite numeric value"), unit: str("Input unit", { maxLength: 50 }) }, ["name", "value"]) },
+      result: num("Expected result; rejected when recomputation differs"),
+      unit: str("Result unit", { maxLength: 50 }),
+      note: str("Method note", { maxLength: 1000 }),
+      evidenceIds: { type: "array", maxItems: 50, items: { type: "string", maxLength: 80 } },
+    }, ["id", "label", "operation", "inputs", "result"]) },
+  }, ["path", "title", "purpose", "audience", "sections"]), capability: "OFFICE_WRITE", resources: none, progress: (a) => `Building and checking ${fileName(a.path)}…`, batchable: false, changesUi: false },
   { name: "office.status", group: "office", description: "Check whether desktop Microsoft Word, Excel and PowerPoint are installed. Does not launch them.", args: obj({}), capability: "READ_FILE", resources: none, progress: () => "Checking Microsoft Office…", batchable: true, changesUi: false },
   { name: "office.create_word", group: "office", description: "Create a new .docx with Microsoft Word, save it to a new path, and verify the file. Never overwrites. Always asks for approval.", args: obj({ path: str("New absolute .docx path"), title: str("Optional document title", { maxLength: 500 }), content: str("Document body", { maxLength: 500000 }) }, ["path", "content"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Creating ${fileName(a.path)} in Word…`, batchable: false, changesUi: true },
   { name: "office.create_workbook", group: "office", description: "Create a new .xlsx with Microsoft Excel from rows of values, save it, and verify the file. Formula-like strings (=, +, -, @) are always escaped to prevent formula injection. Never overwrites. Always asks for approval.", args: obj({ path: str("New absolute .xlsx path"), sheet_name: str("Worksheet name", { maxLength: 31 }), rows: { type: "array", items: { type: "array", items: { type: ["string", "number", "boolean", "null"] }, maxItems: 200 }, maxItems: 10000 }, header: bool("Bold the first row") }, ["path", "rows"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Creating ${fileName(a.path)} in Excel…`, batchable: false, changesUi: true },
@@ -160,7 +221,7 @@ export function exposedGroups(goal: string, context: { process?: string | null; 
   if (/(file|folder|photo|image|picture|pic|thumbnail|video|document|pdf|screenshot|download|explorer|copy|move|rename|delete|organi[sz]e|tasveer|foto)/.test(text) || /explorer/i.test(context.process || "")) {
     groups.add("files");
   }
-  if (/(microsoft office|\bword\b|docx|\bexcel\b|xlsx|spreadsheet|\bpowerpoint\b|pptx|presentation|export.{0,12}pdf)/.test(text) || /winword|excel|powerpnt/i.test(context.process || "")) groups.add("office");
+  if (/(microsoft office|\bword\b|docx|\breport\b|proposal|brief|working paper|status update|\bexcel\b|xlsx|spreadsheet|\bpowerpoint\b|pptx|presentation|export.{0,12}pdf)/.test(text) || /winword|excel|powerpnt/i.test(context.process || "")) groups.add("office");
   if (/(download|installer|setup|\.exe|\.msi|\.zip)/.test(text)) groups.add("download");
   if (/(msg|message|send|bhej|text|chat|whatsapp|\bwp\b|\bwa\b|telegram|signal|messenger|reply|call|baat)/.test(text)) groups.add("messaging");
   if (/(send|bhej|attach|share|paste|copy|clipboard|whatsapp|telegram|mail)/.test(text)) groups.add("clipboard");

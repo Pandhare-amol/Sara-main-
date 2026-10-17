@@ -37,6 +37,7 @@ import { appEvents, type AppEvent } from "../shared/appEvents";
 import { createLogger, logHub } from "../shared/logger";
 import { IntelligenceService } from "../intelligence/service";
 import { KnowledgeService } from "../knowledge/service";
+import { ReportService } from "../reporting/service";
 import { CharacterLibrary } from "./characterLibrary";
 import { PoseStore } from "./poseStore";
 
@@ -76,6 +77,7 @@ export class MyraaRuntime {
   readonly router: ModelRouter;
   readonly intelligence: IntelligenceService;
   readonly knowledgeIndex: KnowledgeService;
+  readonly reports: ReportService;
   readonly permissions: PermissionEngine;
   readonly confirmations = new ConfirmationBroker();
   readonly tasks: TaskStore;
@@ -110,6 +112,7 @@ export class MyraaRuntime {
     this.router = new ModelRouter(this.registry);
     this.intelligence = new IntelligenceService(this.router, dataDir);
     this.knowledgeIndex = new KnowledgeService(dataDir, this.router);
+    this.reports = new ReportService({ dataDir });
     this.permissions = new PermissionEngine(dataDir);
     this.tasks = new TaskStore({ dataDir });
     this.perception = new PerceptionEngine(options.callAgent, this.router);
@@ -133,6 +136,7 @@ export class MyraaRuntime {
       audit: this.audit,
       remember: (fact, kind) => options.remember(fact, kind === "preference" ? "preference" : "semantic", 0.7),
       notify: (title, body) => this.notify(title, body),
+      createWordReport: (request, signal) => this.reports.createWord(request, { signal }),
       conflictWaitMs: this.currentSettings.autonomy.conflictWaitSec * 1000,
     });
     this.manager = new TaskManager({
@@ -178,6 +182,7 @@ export class MyraaRuntime {
       this.registry.initialize(),
       this.intelligence.initialize(),
       this.knowledgeIndex.initialize(),
+      this.reports.initialize(),
       this.permissions.initialize(),
       this.tasks.initialize(),
       this.downloads.initialize(),
@@ -498,6 +503,27 @@ export class MyraaRuntime {
     app.use("/user-characters", express.static(this.characters.root, { fallthrough: true, index: false, dotfiles: "deny" }));
     this.intelligence.registerRoutes(app);
     this.knowledgeIndex.registerRoutes(app);
+
+    // Structured reports. Generation is queued as a normal task so OFFICE_WRITE
+    // confirmation, cancellation, audit, evidence and completion reporting are
+    // identical for API, text and voice requests.
+    app.get("/api/reports/templates", wrap(() => ({ templates: this.reports.templates() })));
+    app.get("/api/reports", wrap((req) => ({ reports: this.reports.list(Number(req.query.limit) || 100) })));
+    app.post("/api/reports/validate", wrap((req) => this.reports.validate(req.body || {})));
+    app.post("/api/reports/word", wrap((req) => {
+      const validation = this.reports.validate(req.body || {});
+      if (!validation.valid || !validation.normalized) {
+        const error = new Error(`Invalid report request: ${validation.errors.join(" ")}`) as Error & { status: number };
+        error.status = 422;
+        throw error;
+      }
+      const session = this.manager.runDirect(
+        `Create and verify Word report "${validation.normalized.title}" at ${validation.normalized.path}`,
+        { tool: "report.create_word", args: JSON.parse(JSON.stringify(validation.normalized)) as Record<string, unknown> },
+        "text",
+      );
+      return { task: publicTaskView(session), warnings: validation.warnings };
+    }));
 
     // models
     app.get("/api/models", wrap(() => ({
