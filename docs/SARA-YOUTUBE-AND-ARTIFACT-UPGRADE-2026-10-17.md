@@ -178,7 +178,7 @@ The artifact open/preview route was also corrected: `fs.open` now calls the OS d
 - Full Python desktop suite in `.venv`: **64 total / 61 passed / 3 Windows-only UIA skipped / 0 failed**.
 - Full project command with the virtual environment selected (`PATH="$PWD/.venv/bin:$PATH" npm test`): passed, including type-check, all Node suites and all Python suites.
 - Production build (`npm run build`): passed (Vite and bundled server).
-- Windows CI is recorded separately after the release commit/push.
+- Windows CI for implementation commit `0516902`: push run [`39012684103`](https://github.com/Pandhare-amol/Sara-main-/actions/runs/39012684103) passed; pull-request run [`39012686931`](https://github.com/Pandhare-amol/Sara-main-/actions/runs/39012686931) passed. Both completed dependency install (including SMTC), type-check, all listed Node/Python regressions and production build.
 - Python compile and `git diff --check`: passed.
 
 ### Not claimed
