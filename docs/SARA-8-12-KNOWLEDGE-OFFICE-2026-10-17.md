@@ -167,7 +167,7 @@ Microsoft Office workflows additionally require:
 Targeted tests cover:
 
 - mandatory source authorization and principal isolation;
-- incremental indexing, duplicate detection and deletion cleanup;
+- incremental indexing, duplicate detection, serialized concurrent starts, reliable immediate reindex and deletion cleanup;
 - prompt-injection flags;
 - stale and conflicting source labels;
 - cloud-model prefiltering before retrieval;
@@ -186,7 +186,7 @@ Targeted tests cover:
 Local validation for this branch state:
 
 - TypeScript type-check: passed;
-- Node suites: **116 tests, 108 passed, 8 skipped, 0 failed** (the skips are credential/Windows-only cases);
+- Node suites: **117 tests, 109 passed, 8 skipped, 0 failed** (the skips are credential/Windows-only cases);
 - Python desktop-agent suites: **41 tests, 38 passed, 3 Windows-only skipped, 0 failed**;
 - production Vite/server build: passed;
 - built-server knowledge API smoke test: authorized source creation, completed indexing and cited search passed;

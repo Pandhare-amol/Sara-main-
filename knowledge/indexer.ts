@@ -37,6 +37,8 @@ export interface CreateSourceInput {
 
 export class KnowledgeIndexer {
   private readonly active = new Map<string, { controller: AbortController; promise: Promise<void> }>();
+  /** Serializes start decisions per owner/source across the first awaited store write. */
+  private readonly starting = new Set<string>();
   private readonly refreshTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(readonly store: KnowledgeStore, private readonly router: ModelRouter | null) {}
@@ -106,23 +108,40 @@ export class KnowledgeIndexer {
   }
 
   async start(ownerId: string, sourceId: string, retryOf: string | null = null): Promise<IndexJob> {
-    const root = this.requireRoot(ownerId, sourceId);
-    if (!root.enabled) throw conflict("This source is disabled.");
-    if ([...this.active.keys()].some((id) => this.store.job(ownerId, id)?.sourceId === sourceId)) throw conflict("This source is already being indexed.");
-    const now = new Date().toISOString();
-    const job: IndexJob = {
-      id: randomUUID(), sourceId, ownerId, status: "queued", progress: 0, stage: "Queued",
-      scanned: 0, indexed: 0, unchanged: 0, unsupported: 0, failed: 0, duplicates: 0, deleted: 0,
-      issues: [], retryOf, checkpoint: { pendingPaths: [], completedPaths: [], nextSafeAction: "Scan the authorized root without following symlinks." },
-      startedAt: now, updatedAt: now, completedAt: null,
-    };
-    await this.store.putJob(job);
-    const controller = new AbortController();
-    const promise = this.run(job, root, controller.signal)
-      .catch((error) => log.warn("indexing job failed", { jobId: job.id, error: error instanceof Error ? error.message : String(error) }))
-      .finally(() => this.active.delete(job.id));
-    this.active.set(job.id, { controller, promise });
-    return job;
+    const startKey = `${ownerId}\0${sourceId}`;
+    if (this.starting.has(startKey)) throw conflict("This source is already being indexed.");
+    this.starting.add(startKey);
+    try {
+      const root = this.requireRoot(ownerId, sourceId);
+      if (!root.enabled) throw conflict("This source is disabled.");
+      const current = [...this.active.entries()].find(([id]) => this.store.job(ownerId, id)?.sourceId === sourceId);
+      if (current) {
+        const existingJob = this.store.job(ownerId, current[0]);
+        if (!existingJob || !["completed", "failed", "cancelled", "interrupted"].includes(existingJob.status)) {
+          throw conflict("This source is already being indexed.");
+        }
+        // A terminal status is persisted immediately before the active promise
+        // removes itself. Await that tiny cleanup window so an immediate,
+        // intentional reindex is not rejected nondeterministically under load.
+        await current[1].promise;
+      }
+      const now = new Date().toISOString();
+      const job: IndexJob = {
+        id: randomUUID(), sourceId, ownerId, status: "queued", progress: 0, stage: "Queued",
+        scanned: 0, indexed: 0, unchanged: 0, unsupported: 0, failed: 0, duplicates: 0, deleted: 0,
+        issues: [], retryOf, checkpoint: { pendingPaths: [], completedPaths: [], nextSafeAction: "Scan the authorized root without following symlinks." },
+        startedAt: now, updatedAt: now, completedAt: null,
+      };
+      await this.store.putJob(job);
+      const controller = new AbortController();
+      const promise = this.run(job, root, controller.signal)
+        .catch((error) => log.warn("indexing job failed", { jobId: job.id, error: error instanceof Error ? error.message : String(error) }))
+        .finally(() => this.active.delete(job.id));
+      this.active.set(job.id, { controller, promise });
+      return job;
+    } finally {
+      this.starting.delete(startKey);
+    }
   }
 
   cancel(ownerId: string, jobId: string): boolean {

@@ -40,6 +40,29 @@ test("local source authorization is explicit and principal is backend-owned", as
   } finally { await ctx.close(); }
 });
 
+test("index starts are serialized and immediate post-completion reindex is reliable", async () => {
+  const ctx = await fixture();
+  try {
+    await fs.writeFile(path.join(ctx.source, "note.md"), "A bounded knowledge note.\n");
+    const root = await ctx.service.indexer.addSource("local-default", { path: ctx.source, authorized: true });
+    const attempts = await Promise.allSettled([
+      ctx.service.indexer.start("local-default", root.id),
+      ctx.service.indexer.start("local-default", root.id),
+    ]);
+    const started = attempts.find((item): item is PromiseFulfilledResult<Awaited<ReturnType<typeof ctx.service.indexer.start>>> => item.status === "fulfilled");
+    const blocked = attempts.find((item) => item.status === "rejected");
+    assert.ok(started, "exactly one concurrent start should succeed");
+    assert.ok(blocked, "the duplicate concurrent start should be rejected");
+    assert.match(String((blocked as PromiseRejectedResult).reason), /already being indexed/);
+    assert.equal((await waitForJob(ctx.service, started.value.id)).status, "completed");
+
+    // waitForJob observes persisted terminal status; start() must safely await
+    // the active promise's tiny cleanup window rather than flake with 409.
+    const second = await ctx.service.indexer.start("local-default", root.id);
+    assert.equal((await waitForJob(ctx.service, second.id)).status, "completed");
+  } finally { await ctx.close(); }
+});
+
 test("incremental project indexing provides citations, symbols, map, injection flags and deletion cleanup", async () => {
   const ctx = await fixture();
   try {
