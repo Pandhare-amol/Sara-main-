@@ -155,6 +155,12 @@ DESKTOP_TOOL_NAMES = [
     "moveDesktopIcon",
     # File Explorer selection
     "selectFiles",
+    # verified Microsoft Office workflows
+    "officeStatus",
+    "officeCreateWord",
+    "officeCreateWorkbook",
+    "officeCreatePresentation",
+    "officeExportPdf",
 ]
 
 
@@ -183,6 +189,7 @@ _MODULE_NAMES = [
     "tools_input_ext",
     "tools_desktop_icons",
     "tools_explorer",
+    "tools_office",
 ]
 
 

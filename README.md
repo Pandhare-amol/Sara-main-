@@ -67,8 +67,9 @@ included; use `dist:public`.
 | `agent/` | PC-control agent: planner, actions, WhatsApp/chat helpers, safety checks |
 | `desktop_agent/` | Python tool server (UI Automation, input, files, apps) |
 | `models/` | Provider-independent model router (Gemini, OpenAI-compatible, Anthropic-compatible and local) |
-| `intelligence/` | Multi-provider review, authorized research, evidence and source-grounded knowledge |
-| `voice/` | Live voice tools |
+| `intelligence/` | Multi-provider review, authorized web research and promoted evidence |
+| `knowledge/` | Authorized local document/code indexing, retrieval, provenance and project maps |
+| `voice/` | Live voice tools, including permission-filtered knowledge queries |
 | `settings/`, `permissions/`, `secrets/` | Settings, permission engine, DPAPI key store |
 | `character_import/` | PMX importer and capability report |
 | `cognition/`, `memory/`, `presence/` | Memory, initiative and presence |
@@ -81,8 +82,19 @@ knowledge, and review versioned skills. Sara checks public-network/redirect safe
 it does not bypass logins, paywalls, CAPTCHAs or access controls. A citation means a passage supports
 the report, not that the claim was independently verified.
 
-The full SARA 8.0–14.0 capability audit, setup notes, security limits and remaining roadmap are in
+**LEARN → Sources** adds local-only-by-default indexing for explicitly authorized document, notes,
+task-history and source-repository folders. Search results include exact passages and file/page/Office
+locations; stale, conflicting or instruction-like text is labeled. Cloud model use is a separate opt-in
+per source. Project sources also produce a static architecture/test/build map.
+
+On Windows with desktop Microsoft Office installed, Sara can create verified new Word, Excel and
+PowerPoint files and export them to PDF. Every Office write asks for approval and never overwrites an
+existing file. Indexing Office Open XML files does not require Office and never executes macros.
+
+The full SARA 8.0–14.0 audit is in
 [`docs/SARA-8-14-IMPLEMENTATION-2026-10-16.md`](docs/SARA-8-14-IMPLEMENTATION-2026-10-16.md).
+The local knowledge/Office setup, format table, security model and current blockers are in
+[`docs/SARA-8-12-KNOWLEDGE-OFFICE-2026-10-17.md`](docs/SARA-8-12-KNOWLEDGE-OFFICE-2026-10-17.md).
 
 ## Graphics quality
 

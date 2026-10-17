@@ -5,7 +5,7 @@ import {
   Globe2, Loader2, Play, RefreshCw, RotateCcw, ShieldAlert, Square, Trash2, X,
 } from "lucide-react";
 
-type Tab = "research" | "knowledge" | "collaboration" | "skills" | "providers";
+type Tab = "sources" | "research" | "knowledge" | "collaboration" | "skills" | "providers";
 
 type ResearchSession = {
   id: string; question: string; status: string; stage: string; progress: number;
@@ -21,6 +21,11 @@ type Provider = { id: string; displayName: string; locality: string; enabled: bo
 type Skill = { id: string; name: string; description: string; status: string; version: number; confidence: number; tests: string[]; verificationEvidence: Array<{ kind: string; passed: boolean; summary: string }>; versions: Array<{ version: number; status: string; changeReason: string }> };
 type IntelligenceStatus = { providers: Provider[]; models: Array<{ id: string; provider: string; displayName: string; availability: string }>; usage: { models: Record<string, UsageView> }; health: Record<string, { recentFailures: number; coolingDown: boolean }>; activeResearchIds: string[]; research: ResearchSession[]; knowledge: Knowledge[] };
 type UsageView = { calls: number; failures: number; inputTokens: number; outputTokens: number; avgLatencyMs: number | null; estimatedCostUsd: number; unpricedCalls: number };
+type KnowledgeRoot = { id: string; label: string; kind: string; rootPath: string; projectId: string | null; allowExternalProcessing: boolean; semanticIndex: boolean; autoRefreshMinutes: number | null; enabled: boolean; lastIndexedAt: string | null };
+type IndexJob = { id: string; sourceId: string; status: string; stage: string; progress: number; scanned: number; indexed: number; unchanged: number; unsupported: number; failed: number; duplicates: number; deleted: number; issues: Array<{ path: string | null; code: string; message: string; retryable: boolean }> };
+type ProjectMapView = { sourceId: string; projectId: string; name: string; entryPoints: Array<{ value: string }>; modules: Array<{ name: string; fileCount: number }>; dependencies: Array<{ name: string; version: string | null }>; apis: Array<{ method: string | null; route: string }>; tests: Array<{ path: string; framework: string | null }>; buildCommands: Array<{ name: string; command: string }>; unresolvedIssues: Array<{ text: string; evidence: { relativePath: string; line: number | null } }>; refreshedAt: string; limitations: string[] };
+type KnowledgeIndexStatus = { roots: KnowledgeRoot[]; counts: Record<string, number>; activeJobIds: string[]; recentJobs: IndexJob[]; projectMaps: ProjectMapView[]; privacy: { defaultExternalProcessing: boolean; notes: string } };
+type SearchHit = { chunkId: string; documentId: string; sourceId: string; fileName: string; relativePath: string; score: number; match: string; passage: string; citation: string; stale: boolean; injectionSuspected: boolean; conflictsWith: string[]; uncertainty: string[] };
 type CollaborationResult = { status: string; verificationStatus: string; consultations: Array<{ modelId: string; providerId: string; text: string; latencyMs: number; estimatedCostUsd: number | null }>; failures: Array<{ modelId: string; error: string }>; review: null | { reviewerModelId: string; independentProvider: boolean; recommendedAnswer: string; consensus: string[]; disagreements: Array<{ topic: string; positions: Array<{ modelId: string; position: string }> }>; unsupportedClaims: Array<{ modelId: string; claim: string; reason: string }>; limitations: string[] } };
 
 interface Props { isOpen: boolean; onClose: () => void }
@@ -28,6 +33,7 @@ interface Props { isOpen: boolean; onClose: () => void }
 export function IntelligenceDashboard({ isOpen, onClose }: Props) {
   const [tab, setTab] = useState<Tab>("research");
   const [status, setStatus] = useState<IntelligenceStatus | null>(null);
+  const [indexStatus, setIndexStatus] = useState<KnowledgeIndexStatus | null>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<{ session: ResearchSession; sources: ResearchSource[]; active: boolean } | null>(null);
@@ -41,12 +47,14 @@ export function IntelligenceDashboard({ isOpen, onClose }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const [next, nextSkills] = await Promise.all([
+      const [next, nextSkills, nextIndex] = await Promise.all([
         apiRequest<IntelligenceStatus>("/api/intelligence/status"),
         apiRequest<Skill[]>("/api/skills"),
+        apiRequest<KnowledgeIndexStatus>("/api/knowledge-index"),
       ]);
       setStatus(next);
       setSkills(nextSkills);
+      setIndexStatus(nextIndex);
       if (selectedId) {
         const selected = await apiRequest<{ session: ResearchSession; sources: ResearchSource[]; active: boolean }>(`/api/research/${encodeURIComponent(selectedId)}`);
         setDetail(selected);
@@ -62,10 +70,10 @@ export function IntelligenceDashboard({ isOpen, onClose }: Props) {
     void load();
   }, [isOpen, load]);
   useEffect(() => {
-    if (!isOpen || !(status?.activeResearchIds.length)) return;
+    if (!isOpen || !(status?.activeResearchIds.length || indexStatus?.activeJobIds.length)) return;
     const timer = window.setInterval(() => void load(), 1_500);
     return () => window.clearInterval(timer);
-  }, [isOpen, status?.activeResearchIds.length, load]);
+  }, [isOpen, status?.activeResearchIds.length, indexStatus?.activeJobIds.length, load]);
 
   const select = async (id: string) => {
     setSelectedId(id);
@@ -146,15 +154,16 @@ export function IntelligenceDashboard({ isOpen, onClose }: Props) {
           <motion.div className="fixed inset-0 z-[70] bg-black/55 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
           <motion.aside className="fixed right-0 top-0 z-[71] flex h-full w-full max-w-3xl flex-col border-l border-white/10 bg-[#080b12]/98 shadow-2xl" initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 28, stiffness: 260 }}>
             <header className="flex items-center justify-between border-b border-white/10 px-5 py-4">
-              <div><div className="flex items-center gap-2 text-sm font-semibold text-white"><BrainCircuit size={17} className="text-cyan-300" /> Learning & research</div><div className="mt-1 text-[10px] font-mono uppercase tracking-wider text-slate-500">Evidence, providers, skills and cost — no silent auto-learning</div></div>
+              <div><div className="flex items-center gap-2 text-sm font-semibold text-white"><BrainCircuit size={17} className="text-cyan-300" /> Learning & research</div><div className="mt-1 text-[10px] font-mono uppercase tracking-wider text-slate-500">Authorized local sources, evidence, providers and skills — no silent indexing</div></div>
               <button onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Close learning dashboard"><X size={18} /></button>
             </header>
             <nav className="flex gap-1 overflow-x-auto border-b border-white/10 px-4 py-2">
-              {(["research", "knowledge", "collaboration", "skills", "providers"] as Tab[]).map((item) => <button key={item} onClick={() => setTab(item)} className={`rounded-lg px-3 py-1.5 text-[10px] font-mono uppercase ${tab === item ? "bg-cyan-500/15 text-cyan-200" : "text-slate-500 hover:text-white"}`}>{item}</button>)}
+              {(["sources", "research", "knowledge", "collaboration", "skills", "providers"] as Tab[]).map((item) => <button key={item} onClick={() => setTab(item)} className={`rounded-lg px-3 py-1.5 text-[10px] font-mono uppercase ${tab === item ? "bg-cyan-500/15 text-cyan-200" : "text-slate-500 hover:text-white"}`}>{item}</button>)}
               <button onClick={() => void load()} className="ml-auto rounded-lg p-1.5 text-slate-500 hover:text-white" title="Refresh"><RefreshCw size={13} /></button>
             </nav>
             {error && <div className="mx-4 mt-3 flex items-start gap-2 rounded-xl border border-rose-400/20 bg-rose-400/5 p-3 text-xs text-rose-200"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{error}</div>}
             <div className="flex-1 overflow-y-auto p-4">
+              {tab === "sources" && <LocalSourcesView status={indexStatus} reload={load} reportError={setError} />}
               {tab === "research" && <ResearchView status={status} detail={detail} selectedId={selectedId} busy={busy} question={question} urls={urls} authorized={authorized} setQuestion={setQuestion} setUrls={setUrls} setAuthorized={setAuthorized} start={() => void startResearch()} select={(id) => void select(id)} action={(action) => void researchAction(action)} promote={(finding) => void promote(finding)} />}
               {tab === "knowledge" && <KnowledgeView items={status?.knowledge || []} busy={busy} remove={async (id) => { setBusy(`knowledge:${id}`); try { await apiRequest(`/api/knowledge/${encodeURIComponent(id)}`, { method: "DELETE" }); await load(); } catch (cause) { setError(message(cause)); } finally { setBusy(null); } }} />}
               {tab === "collaboration" && <CollaborationView prompt={collaborationPrompt} setPrompt={setCollaborationPrompt} busy={busy === "collaboration"} run={() => void collaborate()} result={collaborationResult} />}
@@ -166,6 +175,98 @@ export function IntelligenceDashboard({ isOpen, onClose }: Props) {
       )}
     </AnimatePresence>
   );
+}
+
+function LocalSourcesView({ status, reload, reportError }: { status: KnowledgeIndexStatus | null; reload: () => Promise<void>; reportError: (value: string | null) => void }) {
+  const [folder, setFolder] = useState("");
+  const [label, setLabel] = useState("");
+  const [kind, setKind] = useState("documents");
+  const [authorized, setAuthorized] = useState(false);
+  const [external, setExternal] = useState(false);
+  const [semantic, setSemantic] = useState(false);
+  const [historyAuthorized, setHistoryAuthorized] = useState(false);
+  const [working, setWorking] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [selectedSource, setSelectedSource] = useState<string>("");
+
+  const add = async () => {
+    if (!folder.trim() || !authorized) return;
+    setWorking("add"); reportError(null);
+    try {
+      await apiRequest("/api/knowledge-index/sources", { method: "POST", body: { path: folder.trim(), label: label.trim() || undefined, kind, authorized: true, allowExternalProcessing: external, semanticIndex: semantic, start: true } });
+      setFolder(""); setLabel(""); setAuthorized(false); setExternal(false); setSemantic(false);
+      await reload();
+    } catch (cause) { reportError(message(cause)); } finally { setWorking(null); }
+  };
+  const connectHistory = async () => {
+    if (!historyAuthorized) return;
+    setWorking("history"); reportError(null);
+    try { await apiRequest("/api/knowledge-index/connect-task-history", { method: "POST", body: { authorized: true, allowExternalProcessing: false } }); setHistoryAuthorized(false); await reload(); }
+    catch (cause) { reportError(message(cause)); } finally { setWorking(null); }
+  };
+  const toggleExternal = async (root: KnowledgeRoot) => {
+    if (!root.allowExternalProcessing && !window.confirm(`Allow excerpts from “${root.label}” to be sent to your configured cloud AI providers for voice/chat/planning?`)) return;
+    setWorking(`external:${root.id}`);
+    try { await apiRequest(`/api/knowledge-index/sources/${encodeURIComponent(root.id)}`, { method: "PATCH", body: { allowExternalProcessing: !root.allowExternalProcessing } }); await reload(); }
+    catch (cause) { reportError(message(cause)); } finally { setWorking(null); }
+  };
+  const run = async (root: KnowledgeRoot, action: "reindex" | "delete" | "map") => {
+    if (action === "delete" && !window.confirm(`Remove “${root.label}” and all of its derived index data? The original files will not be deleted.`)) return;
+    setWorking(`${action}:${root.id}`); reportError(null);
+    try {
+      if (action === "delete") await apiRequest(`/api/knowledge-index/sources/${encodeURIComponent(root.id)}?confirm=true`, { method: "DELETE" });
+      else await apiRequest(action === "map" ? `/api/knowledge-index/projects/${encodeURIComponent(root.id)}/refresh` : `/api/knowledge-index/sources/${encodeURIComponent(root.id)}/reindex`, { method: "POST", body: {} });
+      await reload();
+    } catch (cause) { reportError(message(cause)); } finally { setWorking(null); }
+  };
+  const search = async () => {
+    if (!query.trim()) return;
+    setWorking("search"); reportError(null);
+    try { setHits(await apiRequest("/api/knowledge-index/search", { method: "POST", body: { query, sourceIds: selectedSource ? [selectedSource] : undefined, mode: "hybrid", limit: 15, includeStale: true } })); }
+    catch (cause) { reportError(message(cause)); } finally { setWorking(null); }
+  };
+  const correct = async (hit: SearchHit) => {
+    const note = window.prompt(`Correction note for ${hit.citation}. The source file remains unchanged; this note will be shown with future results.`)?.trim();
+    if (!note) return;
+    setWorking(`correct:${hit.documentId}`);
+    try { await apiRequest(`/api/knowledge-index/documents/${encodeURIComponent(hit.documentId)}/correct`, { method: "POST", body: { note } }); await search(); }
+    catch (cause) { reportError(message(cause)); } finally { setWorking(null); }
+  };
+  const cancel = async (job: IndexJob) => {
+    setWorking(`cancel:${job.id}`);
+    try { await apiRequest(`/api/knowledge-index/jobs/${encodeURIComponent(job.id)}/cancel`, { method: "POST", body: {} }); await reload(); }
+    catch (cause) { reportError(message(cause)); } finally { setWorking(null); }
+  };
+
+  return <div className="space-y-4">
+    <Panel title="Authorize a local source" icon={<Database size={14} />}>
+      <div className="grid gap-2 sm:grid-cols-2"><input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="Absolute folder path" className="rounded-lg border border-white/10 bg-black/30 p-2 font-mono text-[11px] text-white outline-none" /><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (optional)" className="rounded-lg border border-white/10 bg-black/30 p-2 text-[11px] text-white outline-none" /></div>
+      <select value={kind} onChange={(e) => setKind(e.target.value)} className="rounded-lg border border-white/10 bg-slate-950 p-2 text-[11px] text-white"><option value="documents">Documents</option><option value="project">Source repository / project</option><option value="notes">Notes</option><option value="task_history">Task history export</option><option value="storage">Configured storage folder</option></select>
+      <label className="flex items-start gap-2 text-[10px] text-slate-400"><input type="checkbox" checked={authorized} onChange={(e) => setAuthorized(e.target.checked)} className="mt-0.5 accent-cyan-500" />I authorize Sara to read supported files in this exact folder. Symlinks, credentials, build output, browser profiles and hidden VCS data remain excluded.</label>
+      <label className="flex items-start gap-2 text-[10px] text-amber-200/75"><input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} className="mt-0.5 accent-amber-500" />Allow passages from this source to be sent to configured cloud AI providers for chat/planning/embeddings. Off means local search only.</label>
+      <label className="flex items-start gap-2 text-[10px] text-slate-400"><input type="checkbox" checked={semantic} onChange={(e) => setSemantic(e.target.checked)} className="mt-0.5 accent-cyan-500" />Build optional semantic vectors when a permitted embedding model is configured; keyword/code-symbol search works without one.</label>
+      <button onClick={() => void add()} disabled={!authorized || !folder.trim() || working === "add"} className="flex items-center gap-1.5 rounded-lg bg-cyan-500/15 px-3 py-2 text-[11px] text-cyan-200 disabled:opacity-40">{working === "add" ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Authorize & index</button>
+      <div className="border-t border-white/5 pt-2"><label className="flex items-start gap-2 text-[10px] text-slate-400"><input type="checkbox" checked={historyAuthorized} onChange={(e) => setHistoryAuthorized(e.target.checked)} className="mt-0.5 accent-cyan-500" />Allow Sara to index its own persisted task-session records for “previous work” and unfinished-task queries. This stays local-only.</label><button onClick={() => void connectHistory()} disabled={!historyAuthorized || working === "history"} className="mt-2 rounded-lg border border-white/10 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-40">Connect task history</button></div>
+    </Panel>
+    <Panel title="Search indexed sources" icon={<BookOpenCheck size={14} />}>
+      <div className="flex gap-2"><input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void search(); }} placeholder="Authentication code, architecture, unfinished tasks, tests…" className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 p-2 text-xs text-white outline-none" /><button onClick={() => void search()} disabled={!query.trim() || working === "search"} className="rounded-lg bg-cyan-500/15 px-3 text-[10px] text-cyan-200">Search</button></div>
+      <select value={selectedSource} onChange={(e) => setSelectedSource(e.target.value)} className="w-full rounded-lg border border-white/10 bg-slate-950 p-2 text-[10px] text-slate-300"><option value="">All authorized sources</option>{status?.roots.map((root) => <option key={root.id} value={root.id}>{root.label}</option>)}</select>
+      {hits.map((hit) => <article key={hit.chunkId} className="rounded-lg border border-white/5 bg-black/20 p-2.5"><div className="flex flex-wrap items-center gap-2"><code className="text-[9px] text-cyan-300">{hit.citation}</code><span className="text-[9px] text-slate-500">{hit.match} · {Math.round(hit.score * 100)}%</span>{hit.stale && <Status value="stale" />}{hit.conflictsWith.length > 0 && <Status value="conflicting" />}{hit.injectionSuspected && <span title="Instruction-like text is treated as untrusted data"><ShieldAlert size={11} className="text-amber-300" /></span>}</div><p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-[10px] leading-relaxed text-slate-300">{hit.passage}</p>{hit.uncertainty.map((item) => <p key={item} className="mt-1 text-[9px] text-amber-200/70">{item}</p>)}<button onClick={() => void correct(hit)} className="mt-1 text-[9px] text-cyan-300">Add correction note</button></article>)}
+      {!hits.length && <p className="text-[10px] text-slate-500">Results include source passages and line/Office locations; stale files are labeled rather than silently trusted.</p>}
+    </Panel>
+    <div className="grid gap-3 md:grid-cols-2">{status?.roots.map((root) => {
+      const job = status.recentJobs.find((item) => item.sourceId === root.id);
+      const map = status.projectMaps.find((item) => item.sourceId === root.id);
+      return <Panel key={root.id} title={root.label} icon={job && ["queued", "scanning"].includes(job.status) ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}>
+        <p className="break-all font-mono text-[9px] text-slate-500">{root.rootPath}</p><div className="flex flex-wrap gap-1.5"><Status value={root.kind} /><Status value={root.allowExternalProcessing ? "cloud allowed" : "local only"} />{root.semanticIndex && <Status value="semantic" />}</div>
+        {job && <><div className="h-1.5 overflow-hidden rounded-full bg-white/5"><div className="h-full bg-cyan-400/60" style={{ width: `${job.progress}%` }} /></div><p className="text-[9px] text-slate-500">{job.stage} · {job.indexed} indexed · {job.unchanged} unchanged · {job.unsupported} unsupported · {job.failed} failed</p>{job.issues.slice(-3).map((item, index) => <p key={`${item.code}-${item.path}-${index}`} className="text-[9px] text-amber-200/70">{item.path ? `${item.path}: ` : ""}{item.message}</p>)}</>}
+        {map && <details className="rounded-lg border border-white/5 p-2"><summary className="cursor-pointer text-[10px] text-cyan-200">Project map · {map.entryPoints.length} entry points · {map.tests.length} tests</summary><p className="mt-1 text-[9px] text-slate-400">Build: {map.buildCommands.slice(0, 4).map((item) => item.name).join(", ") || "not detected"}</p><p className="text-[9px] text-slate-400">Modules: {map.modules.slice(0, 8).map((item) => `${item.name} (${item.fileCount})`).join(", ")}</p><p className="text-[9px] text-amber-200/70">Unresolved markers: {map.unresolvedIssues.length}</p></details>}
+        <div className="flex flex-wrap gap-2">{job && ["queued", "scanning"].includes(job.status) ? <Action icon={<Square size={10} />} label="Cancel" onClick={() => void cancel(job)} /> : <Action icon={<RefreshCw size={10} />} label="Reindex" onClick={() => void run(root, "reindex")} />}{root.kind === "project" && <Action icon={<RotateCcw size={10} />} label="Refresh map" onClick={() => void run(root, "map")} />}<Action icon={<ShieldAlert size={10} />} label={root.allowExternalProcessing ? "Make local-only" : "Allow cloud use"} onClick={() => void toggleExternal(root)} /><Action icon={<Trash2 size={10} />} label="Delete index" onClick={() => void run(root, "delete")} danger /></div>
+      </Panel>;
+    })}</div>
+    {status && <Panel title="Index status & lifecycle" icon={<ShieldAlert size={14} />}><p className="text-[10px] text-slate-400">{status.privacy.notes}</p><p className="text-[10px] text-slate-500">{Object.entries(status.counts).map(([key, value]) => `${key}: ${value}`).join(" · ")}</p><a href="/api/knowledge-index/export" className="text-[10px] text-cyan-300">Export my index and provenance</a></Panel>}
+  </div>;
 }
 
 function ResearchView(props: { status: IntelligenceStatus | null; detail: { session: ResearchSession; sources: ResearchSource[]; active: boolean } | null; selectedId: string | null; busy: string | null; question: string; urls: string; authorized: boolean; setQuestion: (v: string) => void; setUrls: (v: string) => void; setAuthorized: (v: boolean) => void; start: () => void; select: (id: string) => void; action: (v: "cancel" | "retry" | "delete") => void; promote: (f: Finding) => void }) {

@@ -65,6 +65,12 @@ test("task store enforces transitions and marks live sessions interrupted after 
   const session = store.create({ goal: "Download Blender", origin: "text" });
   store.transition(session.id, "planning", "Thinking…");
   store.transition(session.id, "running", "Opening browser…");
+  store.update(session.id, (value) => {
+    value.checkpoint.completedWork.push("Resolved the requested download page");
+    value.checkpoint.remainingWork = ["Verify the downloaded file"];
+    value.checkpoint.uncertainActions.push({ at: new Date().toISOString(), tool: "download.start", summary: "Download may have started" });
+    value.checkpoint.nextSafeAction = "Check Downloads before starting another transfer.";
+  });
   assert.throws(() => store.transition(session.id, "queued"), /Invalid task transition/);
   const sensitive = store.create({ goal: "Send photo to Papa", origin: "voice", sensitive: true });
   store.transition(sensitive.id, "running");
@@ -73,6 +79,8 @@ test("task store enforces transitions and marks live sessions interrupted after 
   const restarted = new TaskStore({ dataDir: dir });
   await restarted.initialize();
   assert.equal(restarted.get(session.id)?.state, "interrupted");
+  assert.equal(restarted.get(session.id)?.checkpoint.nextSafeAction, "Check Downloads before starting another transfer.");
+  assert.equal(restarted.get(session.id)?.checkpoint.uncertainActions[0]?.tool, "download.start");
   const recoverable = restarted.takeRecoverable();
   assert.deepEqual(recoverable.map((item) => item.id), [session.id], "sensitive sessions are never offered for resumption");
   assert.equal(restarted.takeRecoverable().length, 0);
@@ -131,6 +139,8 @@ test("permission engine applies defaults, locks risky capabilities and scopes me
   assert.equal(install.decision, "ask");
   assert.equal(install.locked, true);
   assert.equal(engine.grantForSession("PURCHASE"), false);
+  assert.equal(engine.check("OFFICE_WRITE").decision, "ask");
+  assert.equal((await engine.setDecision("OFFICE_WRITE", "allow")).decision, "ask", "Office writes always keep a preview/approval gate");
   // Permanent delete always asks even if deletes are allowed.
   await engine.setDecision("DELETE_FILE", "allow");
   assert.equal(engine.check("DELETE_FILE", { permanent: true }).decision, "ask");

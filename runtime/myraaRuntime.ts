@@ -36,6 +36,7 @@ import { AppSettingsStore, type AppSettings } from "../settings/appSettings";
 import { appEvents, type AppEvent } from "../shared/appEvents";
 import { createLogger, logHub } from "../shared/logger";
 import { IntelligenceService } from "../intelligence/service";
+import { KnowledgeService } from "../knowledge/service";
 import { CharacterLibrary } from "./characterLibrary";
 import { PoseStore } from "./poseStore";
 
@@ -74,6 +75,7 @@ export class MyraaRuntime {
   readonly registry: ModelRegistry;
   readonly router: ModelRouter;
   readonly intelligence: IntelligenceService;
+  readonly knowledgeIndex: KnowledgeService;
   readonly permissions: PermissionEngine;
   readonly confirmations = new ConfirmationBroker();
   readonly tasks: TaskStore;
@@ -107,6 +109,7 @@ export class MyraaRuntime {
     this.registry = new ModelRegistry(dataDir, options.getSecret);
     this.router = new ModelRouter(this.registry);
     this.intelligence = new IntelligenceService(this.router, dataDir);
+    this.knowledgeIndex = new KnowledgeService(dataDir, this.router);
     this.permissions = new PermissionEngine(dataDir);
     this.tasks = new TaskStore({ dataDir });
     this.perception = new PerceptionEngine(options.callAgent, this.router);
@@ -145,7 +148,16 @@ export class MyraaRuntime {
       contacts: this.contacts,
       working: this.working,
       audit: this.audit,
-      recall: (query) => options.recall(query, 6),
+      recall: async (query) => {
+        const memories = await options.recall(query, 6);
+        // Only source grants that explicitly permit the selected model's
+        // locality are eligible. Retrieved passages are labeled untrusted in
+        // KnowledgeService so document text can never become instructions.
+        let locality: "local" | "cloud" = "cloud";
+        try { locality = this.router.candidates("planning")[0]?.locality || "cloud"; } catch { /* planner reports its own configuration error later */ }
+        const sources = await this.knowledgeIndex.modelContext(query, locality, 4).catch(() => []);
+        return [...sources, ...memories.slice(0, 2)];
+      },
       rememberEpisode: (text, importance) => options.remember(text, "episodic", importance),
       speak: (kind, line, facts, priority) => this.speakTaskEvent(kind, line, facts, priority),
       onEmergencyStop: (reason) => {
@@ -165,6 +177,7 @@ export class MyraaRuntime {
     await Promise.all([
       this.registry.initialize(),
       this.intelligence.initialize(),
+      this.knowledgeIndex.initialize(),
       this.permissions.initialize(),
       this.tasks.initialize(),
       this.downloads.initialize(),
@@ -484,6 +497,7 @@ export class MyraaRuntime {
 
     app.use("/user-characters", express.static(this.characters.root, { fallthrough: true, index: false, dotfiles: "deny" }));
     this.intelligence.registerRoutes(app);
+    this.knowledgeIndex.registerRoutes(app);
 
     // models
     app.get("/api/models", wrap(() => ({
@@ -663,7 +677,7 @@ export class MyraaRuntime {
   async shutdown(): Promise<void> {
     for (const timer of this.timers) clearInterval(timer);
     this.utilities.dispose();
-    await Promise.all([this.tasks.flush(), this.intelligence.shutdown()]);
+    await Promise.all([this.tasks.flush(), this.intelligence.shutdown(), this.knowledgeIndex.shutdown()]);
   }
 }
 

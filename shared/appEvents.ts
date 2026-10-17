@@ -19,6 +19,7 @@ export type AppEventType =
   | "model.changed"
   | "model.status"
   | "research.updated"
+  | "knowledge.updated"
   | "notification"
   | "utility.fired"
   | "character.cue"

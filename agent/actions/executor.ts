@@ -612,6 +612,32 @@ export class ActionExecutor {
         if (!response.ok) return failed(response.error);
         return ok(`${definition.name === "fs.reveal" ? "Showed" : "Opened"} ${fileName(args.path)}`, undefined, { files: [{ path: String(args.path), change: "opened" }] });
       }
+      case "office.status": {
+        const response = await call("officeStatus", {});
+        return response.ok ? ok("Checked Microsoft Office", response.result, { changesUi: false }) : failed(response.error);
+      }
+      case "office.create_word":
+      case "office.create_workbook":
+      case "office.create_presentation":
+      case "office.export_pdf": {
+        const tool = ({
+          "office.create_word": "officeCreateWord",
+          "office.create_workbook": "officeCreateWorkbook",
+          "office.create_presentation": "officeCreatePresentation",
+          "office.export_pdf": "officeExportPdf",
+        } as Record<string, string>)[definition.name];
+        const response = await call(tool, args);
+        if (!response.ok) return failed(response.error);
+        const value = response.result as Record<string, unknown>;
+        const outputPath = String(value.path || args.destination || args.path);
+        const check = await call("statPath", { path: outputPath });
+        const info = check.ok ? check.result as Record<string, unknown> : null;
+        const verified = info?.exists === true && Number(info.size) > 0 && value.verified === true;
+        return ok(String(value.result || `Created ${fileName(outputPath)}`), compact(value, ["path", "size", "application", "verified", "verification", "rows", "cells", "slides", "characters", "source"]), {
+          files: [{ path: outputPath, change: "created", detail: definition.name }],
+          verification: { passed: verified, evidence: verified ? `${fileName(outputPath)} exists, is non-empty, and Office reported a successful save.` : "The output file could not be verified.", method: "deterministic" },
+        });
+      }
       case "clipboard.copy_files": {
         const response = await call("copyFilesToClipboard", { paths: args.paths });
         return response.ok ? ok(`Copied ${(args.paths as string[]).map(fileName).join(", ")} to the clipboard`) : failed(response.error);

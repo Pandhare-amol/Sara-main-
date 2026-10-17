@@ -17,7 +17,7 @@ import type { ResourceName } from "../scheduler";
 
 export type ActionGroup =
   | "core" | "vision" | "mouse" | "window" | "app" | "files" | "clipboard"
-  | "browser" | "web" | "download" | "shell" | "system" | "memory" | "task" | "messaging";
+  | "browser" | "web" | "download" | "shell" | "system" | "memory" | "task" | "messaging" | "office";
 
 export interface ActionDefinition {
   name: string;
@@ -96,6 +96,13 @@ export const ACTIONS: ActionDefinition[] = [
   { name: "fs.select", group: "files", description: "Open a folder in File Explorer and select files in it (extension like zip, a name glob, or exact names). Use for any 'select these files' step; it changes nothing on disk.", args: obj({ folder: str("Folder path or alias"), extension: str("Extension without dot"), pattern: str("Glob, e.g. *.zip"), names: { type: "array", items: { type: "string" }, maxItems: 200 } }, ["folder"]), capability: "LAUNCH_APP", resources: () => ["focus"], progress: (a) => `Selecting files in ${fileName(a.folder)}…`, batchable: true, changesUi: true },
   { name: "fs.reveal", group: "files", description: "Show a file selected in File Explorer.", args: obj({ path: str("Path") }, ["path"]), capability: "LAUNCH_APP", resources: () => ["focus"], progress: (a) => `Showing ${fileName(a.path)}…`, batchable: true, changesUi: true },
 
+  // ---- Microsoft Office -----------------------------------------------------------
+  { name: "office.status", group: "office", description: "Check whether desktop Microsoft Word, Excel and PowerPoint are installed. Does not launch them.", args: obj({}), capability: "READ_FILE", resources: none, progress: () => "Checking Microsoft Office…", batchable: true, changesUi: false },
+  { name: "office.create_word", group: "office", description: "Create a new .docx with Microsoft Word, save it to a new path, and verify the file. Never overwrites. Always asks for approval.", args: obj({ path: str("New absolute .docx path"), title: str("Optional document title", { maxLength: 500 }), content: str("Document body", { maxLength: 500000 }) }, ["path", "content"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Creating ${fileName(a.path)} in Word…`, batchable: false, changesUi: true },
+  { name: "office.create_workbook", group: "office", description: "Create a new .xlsx with Microsoft Excel from rows of values, save it, and verify the file. Formula-like strings (=, +, -, @) are always escaped to prevent formula injection. Never overwrites. Always asks for approval.", args: obj({ path: str("New absolute .xlsx path"), sheet_name: str("Worksheet name", { maxLength: 31 }), rows: { type: "array", items: { type: "array", items: { type: ["string", "number", "boolean", "null"] }, maxItems: 200 }, maxItems: 10000 }, header: bool("Bold the first row") }, ["path", "rows"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Creating ${fileName(a.path)} in Excel…`, batchable: false, changesUi: true },
+  { name: "office.create_presentation", group: "office", description: "Create a new .pptx with Microsoft PowerPoint from title/bullet slides, save it, and verify the file. Never overwrites. Always asks for approval.", args: obj({ path: str("New absolute .pptx path"), slides: { type: "array", items: { type: "object", properties: { title: { type: "string", maxLength: 500 }, bullets: { type: "array", items: { type: "string", maxLength: 2000 }, maxItems: 50 } }, required: ["title"], additionalProperties: false }, maxItems: 200 } }, ["path", "slides"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Creating ${fileName(a.path)} in PowerPoint…`, batchable: false, changesUi: true },
+  { name: "office.export_pdf", group: "office", description: "Open an existing .docx/.xlsx/.pptx in Microsoft Office, export to a new .pdf path, and verify the file. Never overwrites. Always asks for approval.", args: obj({ path: str("Existing Office source path"), destination: str("New absolute .pdf path") }, ["path", "destination"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Exporting ${fileName(a.path)} to PDF…`, batchable: false, changesUi: true },
+
   // ---- clipboard ----------------------------------------------------------------
   { name: "clipboard.copy_files", group: "clipboard", description: "Put files on the clipboard (like Ctrl+C in Explorer) so they can be pasted into chats, mail or upload fields with ctrl+v.", args: obj({ paths: { type: "array", items: { type: "string" }, maxItems: 20 } }, ["paths"]), capability: "CLIPBOARD", resources: () => ["clipboard"], progress: () => "Copying the file…", batchable: true, changesUi: false },
   { name: "clipboard.write_text", group: "clipboard", description: "Put text on the clipboard without pasting.", args: obj({ text: str("Text", { maxLength: 100000 }) }, ["text"]), capability: "CLIPBOARD", resources: () => ["clipboard"], progress: () => "Copying text…", batchable: true, changesUi: false },
@@ -150,6 +157,7 @@ export function exposedGroups(goal: string, context: { process?: string | null; 
   if (/(file|folder|photo|image|picture|pic|thumbnail|video|document|pdf|screenshot|download|explorer|copy|move|rename|delete|organi[sz]e|tasveer|foto)/.test(text) || /explorer/i.test(context.process || "")) {
     groups.add("files");
   }
+  if (/(microsoft office|\bword\b|docx|\bexcel\b|xlsx|spreadsheet|\bpowerpoint\b|pptx|presentation|export.{0,12}pdf)/.test(text) || /winword|excel|powerpnt/i.test(context.process || "")) groups.add("office");
   if (/(download|installer|setup|\.exe|\.msi|\.zip)/.test(text)) groups.add("download");
   if (/(msg|message|send|bhej|text|chat|whatsapp|\bwp\b|\bwa\b|telegram|signal|messenger|reply|call|baat)/.test(text)) groups.add("messaging");
   if (/(send|bhej|attach|share|paste|copy|clipboard|whatsapp|telegram|mail)/.test(text)) groups.add("clipboard");
