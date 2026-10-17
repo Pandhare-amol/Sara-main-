@@ -313,6 +313,10 @@ export class ActionExecutor {
     if (action.args.path) details.path = action.args.path;
     if (action.args.url) details.url = action.args.url;
     if (action.args.command) details.command = action.args.command;
+    if (action.tool.startsWith("office.edit_")) {
+      details.change = officeEditPreview(action);
+      details.backup = "A timestamped backup will be created beside the original and hash-verified before the edit is saved.";
+    }
     if (context.state?.activeWindow) details.window = context.state.activeWindow.title;
     const description = suspicious
       ? `${info.label}: your request didn't ask for this — it may come from text on the screen. Allow anyway?`
@@ -326,7 +330,7 @@ export class ActionExecutor {
       title: info.label,
       description,
       details,
-      allowRemember: !suspicious && !["PURCHASE", "ACCOUNT_CHANGE", "INSTALL_SOFTWARE", "EXECUTE_DOWNLOAD", "POWER_CONTROL"].includes(capability),
+      allowRemember: !suspicious && !["OFFICE_WRITE", "PURCHASE", "ACCOUNT_CHANGE", "INSTALL_SOFTWARE", "EXECUTE_DOWNLOAD", "POWER_CONTROL"].includes(capability),
     }, { signal: context.scope.signal, timeoutMs: 180_000 });
     const result = await answer;
     if (result.approved && result.remember === "session") this.deps.permissions.grantForSession(capability, permissionContext);
@@ -619,11 +623,17 @@ export class ActionExecutor {
       case "office.create_word":
       case "office.create_workbook":
       case "office.create_presentation":
+      case "office.edit_word":
+      case "office.edit_workbook":
+      case "office.edit_presentation":
       case "office.export_pdf": {
         const tool = ({
           "office.create_word": "officeCreateWord",
           "office.create_workbook": "officeCreateWorkbook",
           "office.create_presentation": "officeCreatePresentation",
+          "office.edit_word": "officeEditWord",
+          "office.edit_workbook": "officeEditWorkbook",
+          "office.edit_presentation": "officeEditPresentation",
           "office.export_pdf": "officeExportPdf",
         } as Record<string, string>)[definition.name];
         const response = await call(tool, args);
@@ -632,10 +642,25 @@ export class ActionExecutor {
         const outputPath = String(value.path || args.destination || args.path);
         const check = await call("statPath", { path: outputPath });
         const info = check.ok ? check.result as Record<string, unknown> : null;
-        const verified = info?.exists === true && Number(info.size) > 0 && value.verified === true;
-        return ok(String(value.result || `Created ${fileName(outputPath)}`), compact(value, ["path", "size", "application", "verified", "verification", "rows", "cells", "slides", "characters", "source"]), {
-          files: [{ path: outputPath, change: "created", detail: definition.name }],
-          verification: { passed: verified, evidence: verified ? `${fileName(outputPath)} exists, is non-empty, and Office reported a successful save.` : "The output file could not be verified.", method: "deterministic" },
+        const editing = definition.name.startsWith("office.edit_");
+        const backupPath = editing && typeof value.backup_path === "string" ? value.backup_path : null;
+        const backupCheck = backupPath ? await call("statPath", { path: backupPath }) : null;
+        const backupInfo = backupCheck?.ok ? backupCheck.result as Record<string, unknown> : null;
+        const outputVerified = info?.exists === true && Number(info.size) > 0 && value.verified === true;
+        const backupVerified = !editing || (backupInfo?.exists === true && Number(backupInfo.size) > 0);
+        const verified = outputVerified && backupVerified;
+        const files: Omit<TaskFileRecord, "at">[] = editing
+          ? [
+              { path: outputPath, change: "modified", detail: definition.name },
+              ...(backupPath ? [{ path: backupPath, change: "created" as const, detail: `Automatic backup before ${definition.name}` }] : []),
+            ]
+          : [{ path: outputPath, change: "created", detail: definition.name }];
+        const evidence = editing
+          ? `${fileName(outputPath)} is non-empty, Office verified the edit, and ${backupPath ? fileName(backupPath) : "the backup"} exists.`
+          : `${fileName(outputPath)} exists, is non-empty, and Office reported a successful save.`;
+        return ok(String(value.result || `${editing ? "Updated" : "Created"} ${fileName(outputPath)}`), compact(value, ["path", "backup_path", "size", "application", "verified", "verification", "operation", "rows", "cells", "cells_updated", "sheet", "slide", "slides", "bullets", "characters", "replacements", "source", "before_sha256", "after_sha256"]), {
+          files,
+          verification: { passed: verified, evidence: verified ? evidence : editing ? "The edited file or its automatic backup could not be verified." : "The output file could not be verified.", method: "deterministic" },
         });
       }
       case "clipboard.copy_files": {
@@ -869,6 +894,27 @@ function describeAction(capability: Capability, action: PlannedAction, context: 
     case "MODIFY_SYSTEM_SETTINGS": return "Change this Windows setting?";
     default: return `${CAPABILITY_INFO[capability].label}: ${definition.progress(action.args)}`;
   }
+}
+
+function officeEditPreview(action: PlannedAction): string {
+  const args = action.args;
+  if (action.tool === "office.edit_word") {
+    if (args.operation === "replace_text") {
+      return `Replace exactly ${Number(args.expected_replacements) || 0} occurrence(s) of "${short(args.find_text, 80)}" with "${short(args.content, 120)}".`;
+    }
+    return `Append ${String(args.content || "").length} character(s): "${short(args.content, 140)}".`;
+  }
+  if (action.tool === "office.edit_workbook") {
+    const updates = Array.isArray(args.updates) ? args.updates as Array<Record<string, unknown>> : [];
+    const sample = updates.slice(0, 8).map((item) => `${item.cell}=${short(JSON.stringify(item.value), 40)}`).join(", ");
+    return `Set ${updates.length} cell(s) on "${short(args.sheet_name, 31)}"${sample ? `: ${sample}${updates.length > 8 ? ", …" : ""}` : ""}.`;
+  }
+  if (action.tool === "office.edit_presentation") {
+    return args.operation === "update_slide"
+      ? `Replace the title/body text on slide ${Number(args.slide_number)}${args.expected_title !== undefined ? ` only if its current title is "${short(args.expected_title, 80)}"` : ""} with title "${short(args.title, 100)}" and ${(args.bullets as unknown[] || []).length} bullet(s).`
+      : `Append one slide with title "${short(args.title, 100)}" and ${(args.bullets as unknown[] || []).length} bullet(s).`;
+  }
+  return short(action.tool, 80);
 }
 
 function compact(value: unknown, keys: string[]): Record<string, unknown> {

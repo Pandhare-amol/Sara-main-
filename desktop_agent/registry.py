@@ -160,6 +160,9 @@ DESKTOP_TOOL_NAMES = [
     "officeCreateWord",
     "officeCreateWorkbook",
     "officeCreatePresentation",
+    "officeEditWord",
+    "officeEditWorkbook",
+    "officeEditPresentation",
     "officeExportPdf",
 ]
 

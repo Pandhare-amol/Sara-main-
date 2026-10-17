@@ -100,7 +100,7 @@ export const CAPABILITY_INFO: Record<Capability, { label: string; description: s
   BROWSE_WEB: { label: "Use the browser", description: "Open websites and search in your browser.", risk: "low" },
   CLIPBOARD: { label: "Clipboard", description: "Read and write the clipboard.", risk: "medium" },
   NETWORK_API: { label: "Public APIs", description: "Call verified public data APIs (weather, currency…).", risk: "low" },
-  OFFICE_WRITE: { label: "Create Office files", description: "Create a Word, Excel, PowerPoint or PDF file through Microsoft Office after previewing the target path.", risk: "medium" },
+  OFFICE_WRITE: { label: "Modify Office files", description: "Create or edit a Word, Excel, PowerPoint or PDF file through Microsoft Office after previewing the target path and changes.", risk: "medium" },
   PURCHASE: { label: "Purchases", description: "Anything that spends money.", risk: "high" },
   ACCOUNT_CHANGE: { label: "Account changes", description: "Change passwords, profiles or account security.", risk: "high" },
   POWER_CONTROL: { label: "Power", description: "Shut down, restart, sleep or lock the PC.", risk: "high" },

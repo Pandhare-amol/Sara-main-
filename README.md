@@ -87,9 +87,14 @@ task-history and source-repository folders. Search results include exact passage
 locations; stale, conflicting or instruction-like text is labeled. Cloud model use is a separate opt-in
 per source. Project sources also produce a static architecture/test/build map.
 
-On Windows with desktop Microsoft Office installed, Sara can create verified new Word, Excel and
-PowerPoint files and export them to PDF. Every Office write asks for approval and never overwrites an
-existing file. Indexing Office Open XML files does not require Office and never executes macros.
+On Windows with desktop Microsoft Office installed, Sara can create verified Word, Excel and
+PowerPoint files, export them to PDF, and safely edit existing Open XML files. Existing-file edits
+support exact Word append/replacement, explicit Excel cell updates, and PowerPoint text-slide
+append/update. Every Office write asks for approval; an edit previews its bounded change, creates and
+hash-verifies a timestamped same-folder backup before saving, restores that backup on failure, and
+verifies both output and backup. New files and PDF exports never overwrite. Formula-like Excel input
+is always stored as text. Indexing Office Open XML files does not require Office and never executes
+macros.
 
 The full SARA 8.0–14.0 audit is in
 [`docs/SARA-8-14-IMPLEMENTATION-2026-10-16.md`](docs/SARA-8-14-IMPLEMENTATION-2026-10-16.md).

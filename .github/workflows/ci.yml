@@ -50,6 +50,9 @@ jobs:
       - name: Knowledge tests
         run: node --import tsx --test tests/knowledge.test.ts
 
+      - name: Office action tests
+        run: node --import tsx --test tests/officeActions.test.ts
+
       - name: Agent loop tests
         run: node --import tsx --test tests/agentLoop.test.ts
 

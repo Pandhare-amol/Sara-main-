@@ -194,7 +194,8 @@ const DESKTOP_TOOLS: ReadonlySet<string> = new Set([
   "inspectUi", "findUi", "uiAction", "browserState", "screenFingerprint", "captureForVision",
   "getMonitors", "inputState", "windowControl", "knownFolder", "recentFiles", "statPath", "copyFile", "openPath",
   "typeUnicode", "copyFilesToClipboard", "setClipboardText", "desktopIcons", "moveDesktopIcon",
-  "officeStatus", "officeCreateWord", "officeCreateWorkbook", "officeCreatePresentation", "officeExportPdf",
+  "officeStatus", "officeCreateWord", "officeCreateWorkbook", "officeCreatePresentation",
+  "officeEditWord", "officeEditWorkbook", "officeEditPresentation", "officeExportPdf",
 ]);
 
 const API_HUB_TOOLS: ReadonlySet<string> = new Set([

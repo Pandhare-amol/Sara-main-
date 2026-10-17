@@ -26,7 +26,7 @@
     "dist:public": "set VITE_MYRAA_PUBLIC=1&& npm run build && npm run build:launcher && electron-builder --config electron-builder.public.yml --win nsis portable",
     "build:launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-launcher.ps1",
     "test:characters": "node --import tsx --test tests/characters.test.ts",
-    "test:agent": "node --import tsx --test tests/core.test.ts && node --import tsx --test tests/models.test.ts && node --import tsx --test tests/intelligence.test.ts && node --import tsx --test tests/knowledge.test.ts && node --import tsx --test tests/agentLoop.test.ts && node --import tsx --test tests/presence.test.ts && node --import tsx --test tests/chatOpen.test.ts",
+    "test:agent": "node --import tsx --test tests/core.test.ts && node --import tsx --test tests/models.test.ts && node --import tsx --test tests/intelligence.test.ts && node --import tsx --test tests/knowledge.test.ts && node --import tsx --test tests/officeActions.test.ts && node --import tsx --test tests/agentLoop.test.ts && node --import tsx --test tests/presence.test.ts && node --import tsx --test tests/chatOpen.test.ts",
     "test:live": "node --import tsx --test tests/gemini.live.test.ts",
     "test:node": "npm run test:agent && npm run test:characters && npm run test:cognition && npm run test:api-hub && npm run test:screen-vision && npm run test:real-browser && npm run test:live",
     "test": "npm run lint && npm run test:node && npm run test:python",

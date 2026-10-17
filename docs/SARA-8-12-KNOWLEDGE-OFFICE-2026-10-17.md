@@ -100,9 +100,14 @@ New agent actions use desktop Office's local COM automation on Windows:
 - `office.create_word` → new `.docx`;
 - `office.create_workbook` → new `.xlsx`;
 - `office.create_presentation` → new `.pptx`;
+- `office.edit_word` → append text or replace an exact, approved number of case-sensitive matches in an existing `.docx`;
+- `office.edit_workbook` → update up to 1,000 explicit cells in one existing `.xlsx` sheet, with optional expected-value preconditions;
+- `office.edit_presentation` → append one text slide or update one existing text slide in a `.pptx` without deleting pictures/charts;
 - `office.export_pdf` → new PDF from `.docx`, `.xlsx` or `.pptx`.
 
-All Office writes use the locked `OFFICE_WRITE` capability, so approval cannot be relaxed to silent allow. They reject overwrite, enforce safe folders and size/item limits, and verify that the resulting file exists and is non-empty before reporting success. Workbook formula-like strings are escaped as plain text to prevent formula injection. Existing Office files can still be opened and manipulated through the generic file/UIA/semantic-input path; accessibility selectors remain preferred over coordinates.
+All Office writes use the locked `OFFICE_WRITE` capability, so approval cannot be relaxed to silent allow. The confirmation for an existing-file edit previews the bounded change and states the backup behavior. Before Office opens the source for editing, Sara creates a timestamped, non-overwriting backup beside it and verifies that its SHA-256 matches the original. The source is limited to a safe folder, exact Open XML extension, read/write access and 200 MB. Before Office opens it, the bounded package check rejects malformed archives, macros, ActiveX and auto-updating external templates/media/data (ordinary clickable hyperlinks are allowed). A successful edit requires a changed source hash, non-empty source, verified Office-specific content and an intact backup; a failed edit closes Office and attempts a hash-verified restoration from the backup. Both the modified source and backup are written to task checkpoints and the audit trail.
+
+New-file and PDF actions reject overwrite and verify the output before reporting success. Excel creation and editing escape formula-like strings, including whitespace-prefixed `=`, `+`, `-` and `@`, as plain text. Office files can still be opened through the generic file/UIA path for changes outside these deterministic bounded operations; accessibility selectors remain preferred over coordinates.
 
 ## 2. Persistent files
 
@@ -148,7 +153,7 @@ npm run dev
 5. Search for architecture, authentication, tests, earlier work or unresolved items. Open the cited local file before consequential edits.
 6. Use **Allow cloud use** on a source only if its excerpts may be sent to the configured voice/planning provider.
 7. Use **Delete index** to remove that source's metadata and all derived records without touching originals.
-8. Ask Sara to create a Word/Excel/PowerPoint file or export one to PDF. The task panel must show an Office-write approval before the operation runs.
+8. Ask Sara to create or edit a Word/Excel/PowerPoint file, or export one to PDF. The task panel must show an Office-write approval before the operation runs. For edits, review the exact change preview; the verified `*.sara-backup-<UTC timestamp>.*` file remains beside the original.
 
 Microsoft Office workflows additionally require:
 
@@ -171,14 +176,18 @@ Targeted tests cover:
 - Word/Excel/PowerPoint Open XML locations and PDF page extraction;
 - legacy Office unsupported handling;
 - task checkpoint persistence and uncertain-action recovery;
-- locked Office-write approval policy;
+- locked Office-write approval policy and bounded edit-change confirmation previews;
+- Office edit action routing plus modified-source/backup task records;
+- exclusive timestamped backups, SHA-256 verification and restoration;
+- Word replacement-count, Excel cell-address/formula-injection and PowerPoint slide bounds;
+- rejection of malformed, macro/ActiveX and linked external-content Open XML edit sources;
 - Office tool registration, destination extension and no-overwrite behavior.
 
 Local validation for this branch state:
 
 - TypeScript type-check: passed;
-- Node suites: **114 tests, 106 passed, 8 skipped, 0 failed** (the skips are credential/Windows-only cases);
-- Python desktop-agent suites: **35 tests, 32 passed, 3 Windows-only skipped, 0 failed**;
+- Node suites: **116 tests, 108 passed, 8 skipped, 0 failed** (the skips are credential/Windows-only cases);
+- Python desktop-agent suites: **41 tests, 38 passed, 3 Windows-only skipped, 0 failed**;
 - production Vite/server build: passed;
 - built-server knowledge API smoke test: authorized source creation, completed indexing and cited search passed;
 - `git diff --check`: passed;
@@ -194,6 +203,6 @@ Windows CI passed on the implementation commit `a8ab47f`: push run [`38993686878
 - OCR for scanned PDFs is not part of document indexing.
 - Static project maps cannot prove dynamic runtime relationships and do not replace tests.
 - Semantic retrieval requires a configured embedding-capable model; no live cloud embedding call has been made in this environment.
-- Microsoft Office application control cannot be executed in this Linux workspace. The COM interface and non-Windows/error/no-overwrite tests exist; real Office save/export, dialogs and UIA behavior need Windows with Office installed.
+- Microsoft Office application control cannot be executed in this Linux workspace. The COM interfaces and non-Windows/policy/schema/backup/restore tests exist; real Office create/edit/save/export behavior, dialogs and UIA behavior need Windows with Office installed.
 - Live cloud voice, microphone, Windows UIA/OCR, packaged Electron, installer signing/staged updates, long-duration soak/SLOs and hardware-specific behavior remain external validation work. None is reported as completed here.
 - No isolated code-execution sandbox was added, and retrieved code is never executed by the indexer.
