@@ -103,7 +103,8 @@ test("ReportService creates a genuine verified DOCX, records provenance and refu
   await service.initialize();
   const generated = await service.createWord(request(output));
 
-  assert.equal(generated.path, output);
+  // fs.realpath may expand Windows 8.3 temp-folder aliases or normalize drive casing.
+  assert.equal(samePath(generated.path, output), true);
   assert.equal(generated.verified, true);
   assert.equal(generated.qa.passed, true);
   assert.ok(generated.size > 5_000);
@@ -200,3 +201,11 @@ test("report.create_word is approval-gated and records deterministic task eviden
     scope.dispose();
   }
 });
+
+function samePath(left: string, right: string): boolean {
+  const normalize = (value: string) => {
+    const resolved = fs.realpathSync.native(value);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(left) === normalize(right);
+}
