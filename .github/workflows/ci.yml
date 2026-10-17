@@ -35,8 +35,29 @@ jobs:
       - name: Type-check
         run: npm run lint
 
-      - name: Agent and intelligence tests
-        run: npm run test:agent
+      # Keep stateful suites in separate processes/steps. Besides preventing
+      # cross-suite timer/store interference, this makes a Windows failure
+      # identify the exact suite rather than hiding it behind one aggregate.
+      - name: Core security and scheduling tests
+        run: node --import tsx --test tests/core.test.ts
+
+      - name: Model routing tests
+        run: node --import tsx --test tests/models.test.ts
+
+      - name: Intelligence tests
+        run: node --import tsx --test tests/intelligence.test.ts
+
+      - name: Knowledge tests
+        run: node --import tsx --test tests/knowledge.test.ts
+
+      - name: Agent loop tests
+        run: node --import tsx --test tests/agentLoop.test.ts
+
+      - name: Presence tests
+        run: node --import tsx --test tests/presence.test.ts
+
+      - name: Chat target tests
+        run: node --import tsx --test tests/chatOpen.test.ts
 
       - name: Character tests
         run: npm run test:characters
