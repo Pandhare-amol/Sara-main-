@@ -91,6 +91,22 @@ export interface TaskPermissionRecord {
   at: string;
 }
 
+export interface TaskCheckpoint {
+  objective: string;
+  status: string;
+  completedWork: string[];
+  remainingWork: string[];
+  decisions: string[];
+  constraints: string[];
+  changedFiles: TaskFileRecord[];
+  validation: Array<{ at: string; passed: boolean; evidence: string; method: string }>;
+  recoveryAttempts: Array<{ at: string; action: string; outcome: string }>;
+  /** Non-idempotent outcomes that were not conclusively verified; never replay automatically. */
+  uncertainActions: Array<{ at: string; tool: string; summary: string }>;
+  nextSafeAction: string;
+  updatedAt: string;
+}
+
 export interface TaskSession {
   id: string;
   goal: string;
@@ -121,6 +137,8 @@ export interface TaskSession {
   timings: { perceptionMs: number; planningMs: number; actionMs: number };
   /** Step counter (one per planner decision). */
   steps: number;
+  /** Durable, human-inspectable recovery state; updated after every plan/action. */
+  checkpoint: TaskCheckpoint;
 }
 
 export interface TaskStoreOptions {
@@ -147,6 +165,7 @@ export class TaskStore {
     const now = new Date().toISOString();
     for (const session of stored.sessions || []) {
       if (!session?.id) continue;
+      session.checkpoint = normalizeCheckpoint(session);
       if (!TERMINAL_STATES.has(session.state)) {
         // The process ended while this task was live. Nothing is resumed
         // automatically: the state of the desktop must be re-verified first.
@@ -198,6 +217,11 @@ export class TaskStore {
       usage: { modelCalls: 0, visionCalls: 0, inputTokens: 0, outputTokens: 0 },
       timings: { perceptionMs: 0, planningMs: 0, actionMs: 0 },
       steps: 0,
+      checkpoint: {
+        objective: input.goal.trim().slice(0, 2_000), status: "Starting", completedWork: [], remainingWork: [input.goal.trim().slice(0, 500)],
+        decisions: [], constraints: [], changedFiles: [], validation: [], recoveryAttempts: [], uncertainActions: [],
+        nextSafeAction: "Observe current state before taking the first action.", updatedAt: now,
+      },
     };
     this.sessions.set(session.id, session);
     this.emit(session, "created");
@@ -245,6 +269,8 @@ export class TaskStore {
     }
     session.state = to;
     session.updatedAt = new Date().toISOString();
+    session.checkpoint.status = status || to;
+    session.checkpoint.updatedAt = session.updatedAt;
     if (TERMINAL_STATES.has(to)) {
       session.completedAt = session.updatedAt;
       session.pendingConfirmation = null;
@@ -270,6 +296,14 @@ export class TaskStore {
     if (session.actions.length > 120) session.actions.splice(0, session.actions.length - 120);
     if (session.observations.length > 30) session.observations.splice(0, session.observations.length - 30);
     if (session.statusHistory.length > 80) session.statusHistory.splice(0, session.statusHistory.length - 80);
+    session.checkpoint.updatedAt = session.updatedAt;
+    for (const values of [session.checkpoint.completedWork, session.checkpoint.remainingWork, session.checkpoint.decisions, session.checkpoint.constraints]) {
+      if (values.length > 80) values.splice(0, values.length - 80);
+    }
+    if (session.checkpoint.changedFiles.length > 100) session.checkpoint.changedFiles.splice(0, session.checkpoint.changedFiles.length - 100);
+    if (session.checkpoint.validation.length > 100) session.checkpoint.validation.splice(0, session.checkpoint.validation.length - 100);
+    if (session.checkpoint.recoveryAttempts.length > 80) session.checkpoint.recoveryAttempts.splice(0, session.checkpoint.recoveryAttempts.length - 80);
+    if (session.checkpoint.uncertainActions.length > 40) session.checkpoint.uncertainActions.splice(0, session.checkpoint.uncertainActions.length - 40);
     this.emit(session, "updated");
     this.persist();
     return session;
@@ -358,5 +392,25 @@ export function publicTaskView(session: TaskSession) {
     timings: session.timings,
     steps: session.steps,
     sensitive: session.sensitive,
+    checkpoint: session.checkpoint,
+  };
+}
+
+function normalizeCheckpoint(session: TaskSession): TaskCheckpoint {
+  const existing = session.checkpoint as TaskCheckpoint | undefined;
+  const now = session.updatedAt || new Date().toISOString();
+  return {
+    objective: existing?.objective || session.goal,
+    status: existing?.status || session.currentStatus || session.state,
+    completedWork: Array.isArray(existing?.completedWork) ? existing.completedWork : session.actions?.filter((item) => item.status === "ok").map((item) => item.summary) || [],
+    remainingWork: Array.isArray(existing?.remainingWork) ? existing.remainingWork : session.plan?.steps.filter((item) => item.status !== "done").map((item) => item.text) || [],
+    decisions: Array.isArray(existing?.decisions) ? existing.decisions : [],
+    constraints: Array.isArray(existing?.constraints) ? existing.constraints : [],
+    changedFiles: Array.isArray(existing?.changedFiles) ? existing.changedFiles : session.files || [],
+    validation: Array.isArray(existing?.validation) ? existing.validation : [],
+    recoveryAttempts: Array.isArray(existing?.recoveryAttempts) ? existing.recoveryAttempts : [],
+    uncertainActions: Array.isArray(existing?.uncertainActions) ? existing.uncertainActions : [],
+    nextSafeAction: existing?.nextSafeAction || (TERMINAL_STATES.has(session.state) ? "Review the recorded result; do not replay completed actions." : "Re-observe current state before continuing."),
+    updatedAt: existing?.updatedAt || now,
   };
 }

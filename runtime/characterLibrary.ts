@@ -16,7 +16,7 @@ import { analyzeRig, RUNTIME_TESTS, type CharacterProfile, type RuntimeTestResul
 import { rigFromMmdParser } from "../shared/character/rig";
 import { writeJsonFile } from "../shared/jsonFile";
 
-const nodeRequire = createRequire(import.meta.url ?? __filename);
+const nodeRequire = createRequire(path.join(process.cwd(), "package.json"));
 
 export interface CharacterProfileSummary {
   id: string;

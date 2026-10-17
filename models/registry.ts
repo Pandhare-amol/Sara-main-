@@ -123,6 +123,17 @@ export class ModelRegistry {
     await this.initialize();
   }
 
+  /** Persistently enable or disable a known provider without ever writing its key. */
+  async setProviderEnabled(id: string, enabled: boolean): Promise<void> {
+    const provider = this.providers.get(id);
+    if (!provider) throw new Error(`Unknown provider ${id}.`);
+    const user = await readJsonFile<UserModelFile>(this.userFile, {});
+    const providers = (user.providers || []).filter((item) => item.id !== id);
+    providers.push({ id, enabled });
+    await writeJsonFile(this.userFile, { ...user, providers });
+    await this.initialize();
+  }
+
   getModel(id: string): ModelDefinition | undefined {
     return this.models.get(id);
   }

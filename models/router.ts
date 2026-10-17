@@ -80,6 +80,12 @@ export class ModelRouter {
     if (forcedId) {
       const forced = this.registry.getModel(forcedId);
       if (!forced) throw new ModelError("NOT_FOUND", `Unknown model ${forcedId}.`, { retryable: false });
+      const availability = this.registry.availability(forced);
+      if (availability === "not_configured") throw new ModelError("NOT_CONFIGURED", `${forced.displayName}'s provider is not configured.`, { retryable: false });
+      if (availability === "disabled") throw new ModelError("UNAVAILABLE", `${forced.displayName} is disabled.`, { retryable: false });
+      if (availability === "unavailable") throw new ModelError("NOT_FOUND", `${forced.displayName} is not available from its provider.`, { retryable: false });
+      if (offline && forced.locality === "cloud") throw new ModelError("NETWORK", `${forced.displayName} cannot be used while offline.`, { retryable: false });
+      if (!this.satisfies(forced, task, requirements)) throw new ModelError("BAD_REQUEST", `${forced.displayName} does not support the capabilities required for this request.`, { retryable: false });
       return [forced];
     }
 
@@ -236,7 +242,7 @@ export class ModelRouter {
             log.warn(`retry ${model.id} after ${error.code}`, { attempt, delay, purpose: request.purpose });
           },
         });
-        this.usage.recordSuccess(model.id, request.purpose, response.usage, response.latencyMs);
+        this.usage.recordSuccess(model.id, request.purpose, response.usage, response.latencyMs, model.cost);
         this.markHealthy(model.id);
         this.network.markSuccess();
         if (index > 0) {

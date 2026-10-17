@@ -10,6 +10,8 @@ import { ApiCapabilityRegistry } from "../registry";
 import { ApiHubService } from "../service";
 import { builtInAdapters } from "../builtInAdapters";
 
+const PUBLIC_TEST_LOOKUP = async () => [{ address: "93.184.216.34", family: 4 }];
+
 const FIXTURE = `
 ### Animals
 API | Description | Auth | HTTPS | CORS
@@ -59,6 +61,7 @@ test("API hub sync validates and caches the upstream catalogue", async (t) => {
     sourceUrl: "https://catalogue.example.test/README.md",
     minimumProviderCount: 1,
     maximumAgeMs: 60_000,
+    lookup: PUBLIC_TEST_LOOKUP,
     fetcher: async () => {
       calls += 1;
       return new Response(FIXTURE, { status: 200, headers: { etag: "fixture-v1" } });
@@ -119,6 +122,7 @@ test("verified declarative adapters normalize JSON without executing code", asyn
   const fixture = { current: { temperature: 24, condition: "clear" } };
   const adapter = verifyAdapterAgainstFixture(candidate, fixture);
   const result = await executeVerifiedAdapter(adapter, { city: "Pune" }, {
+    lookup: PUBLIC_TEST_LOOKUP,
     fetcher: async (input) => {
       assert.match(String(input), /city=Pune/);
       return new Response(JSON.stringify(fixture), {

@@ -74,6 +74,18 @@ export interface ExecutorDeps {
   audit: AuditLog;
   remember: (fact: string, kind: string) => Promise<void>;
   notify: (title: string, body: string) => void;
+  /** Cross-platform structured Word generation; execution still passes through OFFICE_WRITE approval. */
+  createWordReport?: (request: Record<string, unknown>, signal?: AbortSignal) => Promise<{
+    path: string;
+    title: string;
+    size: number;
+    sha256: string;
+    verified: true;
+    verification: string;
+    qa: { passed: boolean; checks: Array<{ id: string; status: string; detail: string }>; warnings: string[] };
+  }>;
+  /** Provider-neutral status only; never returns credentials. */
+  contentCapabilities?: () => Record<string, unknown>;
   /** Seconds to wait for the user to stop using the mouse before yielding. */
   conflictWaitMs?: number;
 }
@@ -176,6 +188,13 @@ export class ActionExecutor {
         if (!info?.exists) return fail("ELEMENT_NOT_FOUND", `File not found: ${args.path}`);
         if (info.kind === "executable") args.__executable = true;
       }
+      if (action.tool === "fs.create_text") {
+        const binary = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".ico", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
+        const extension = path.extname(String(args.path || "")).toLowerCase();
+        if (binary.has(extension)) {
+          return fail("INVALID_ACTION", `fs.create_text cannot create a real ${extension || "binary"} artifact. Use a configured image/Office/report generator, or report the missing capability honestly.`);
+        }
+      }
       let shellSafe = false;
       if (action.tool === "shell.run") {
         const verdict = classifyCommand(String(args.command));
@@ -264,6 +283,16 @@ export class ActionExecutor {
       return result;
     } catch (error) {
       if (error instanceof CancelledError || context.scope.cancelled) {
+        if (action.tool.startsWith("youtube.")) {
+          // HTTP cancellation alone can leave a synchronous Windows UIA call
+          // running in the desktop-agent thread. Send the adapter's dedicated
+          // cancellation signal without reusing the already-aborted scope.
+          try {
+            await this.deps.call("youtubeCancel", {}, new AbortController().signal);
+          } catch {
+            /* best effort; the task is still cancelled locally */
+          }
+        }
         return { ...fail("USER_INTERRUPTED", "Cancelled."), summary: "Stopped" };
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -313,6 +342,23 @@ export class ActionExecutor {
     if (action.args.path) details.path = action.args.path;
     if (action.args.url) details.url = action.args.url;
     if (action.args.command) details.command = action.args.command;
+    if (action.tool.startsWith("office.edit_")) {
+      details.change = officeEditPreview(action);
+      details.backup = "A timestamped backup will be created beside the original and hash-verified before the edit is saved.";
+    }
+    if (action.tool === "report.create_word") {
+      const sections = Array.isArray(action.args.sections) ? action.args.sections : [];
+      const sources = Array.isArray(action.args.sources) ? action.args.sources : [];
+      details.report = {
+        title: short(action.args.title, 120),
+        audience: short(action.args.audience, 120),
+        purpose: short(action.args.purpose, 200),
+        template: action.args.templateId || "generic-professional",
+        sections: sections.length,
+        sources: sources.length,
+      };
+      details.delivery = "Creates a new file only, validates the Open XML package and content, and records a SHA-256 manifest. Existing files are never overwritten.";
+    }
     if (context.state?.activeWindow) details.window = context.state.activeWindow.title;
     const description = suspicious
       ? `${info.label}: your request didn't ask for this — it may come from text on the screen. Allow anyway?`
@@ -326,7 +372,7 @@ export class ActionExecutor {
       title: info.label,
       description,
       details,
-      allowRemember: !suspicious && !["PURCHASE", "ACCOUNT_CHANGE", "INSTALL_SOFTWARE", "EXECUTE_DOWNLOAD", "POWER_CONTROL"].includes(capability),
+      allowRemember: !suspicious && !["OFFICE_WRITE", "PURCHASE", "ACCOUNT_CHANGE", "INSTALL_SOFTWARE", "EXECUTE_DOWNLOAD", "POWER_CONTROL"].includes(capability),
     }, { signal: context.scope.signal, timeoutMs: 180_000 });
     const result = await answer;
     if (result.approved && result.remember === "session") this.deps.permissions.grantForSession(capability, permissionContext);
@@ -597,7 +643,14 @@ export class ActionExecutor {
           changesUi: false,
         });
       }
-      case "fs.open":
+      case "fs.open": {
+        const response = await call("openPath", { path: args.path, ...(args.__executable ? { allow_executable: true } : {}) });
+        if (!response.ok) return failed(response.error);
+        return ok(`Opened ${fileName(args.path)}`, compact(response.result, ["path", "kind", "application"]), {
+          files: [{ path: String(args.path), change: "opened" }],
+          verification: { passed: true, evidence: `${fileName(args.path)} existed and the operating system accepted the default-app open request.`, method: "deterministic" },
+        });
+      }
       case "fs.select": {
         const response = await call("selectFiles", { folder: args.folder, extension: args.extension, pattern: args.pattern, names: args.names });
         if (!response.ok) return failed(response.error);
@@ -608,9 +661,109 @@ export class ActionExecutor {
         });
       }
       case "fs.reveal": {
-        const response = await call("openPath", { path: args.path, ...(definition.name === "fs.reveal" ? { select: true } : {}), ...(args.__executable ? { allow_executable: true } : {}) });
+        const response = await call("openPath", { path: args.path, select: true });
         if (!response.ok) return failed(response.error);
-        return ok(`${definition.name === "fs.reveal" ? "Showed" : "Opened"} ${fileName(args.path)}`, undefined, { files: [{ path: String(args.path), change: "opened" }] });
+        return ok(`Showed ${fileName(args.path)}`, undefined, { files: [{ path: String(args.path), change: "opened" }] });
+      }
+      case "artifact.capabilities": {
+        const configured = this.deps.contentCapabilities?.() || {
+          textAndCode: { configured: false, reason: "No provider status callback is configured." },
+          imageOutput: { configured: false, reason: "No authorized image-output adapter is registered in the provider-neutral gateway." },
+          codeTesting: { sandboxed: false, permissionedCommandRunner: true, reason: "No isolated sandbox runner is configured." },
+        };
+        const office = await call("officeStatus", {});
+        const officeStatus = office.ok ? office.result as Record<string, unknown> : {
+          windows: false,
+          applications: { word: false, excel: false, powerpoint: false },
+          error: office.error || "Desktop Office status is unavailable.",
+        };
+        return ok("Checked configured artifact providers and local Office mechanisms", {
+          ...configured,
+          formats: {
+            text: "fs.create_text (real UTF-8 text/code; binary extensions rejected)",
+            code: "fs.create_text plus static review; shell.run is approval/timeout bounded but is not a security sandbox",
+            docx: "report.create_word (cross-platform verified Open XML) or installed Microsoft Word COM",
+            xlsx: "installed Microsoft Excel COM; deterministic value tables, with formulas/charts only through the explicit Office schema",
+            pptx: "installed Microsoft PowerPoint COM; editable title/bullet slides",
+            pdf: "export from a verified DOCX/XLSX/PPTX through the corresponding installed Office app",
+            image: "requires an authorized image-output adapter; text/vision-input models do not count as image generators",
+          },
+          office: officeStatus,
+          safeguards: ["new paths only", "no silent overwrite", "binary integrity/size verification", "Office edits keep a hash-verified backup"],
+        }, {
+          verification: { passed: true, evidence: "Capability status came from the provider registry contract and the local desktop Office status tool.", method: "deterministic" },
+          changesUi: false,
+        });
+      }
+      case "report.create_word": {
+        if (!this.deps.createWordReport) return failed("Structured Word report generation is not configured.");
+        const generated = await this.deps.createWordReport(args, signal);
+        const verified = generated.verified === true && generated.qa?.passed === true && generated.size > 0;
+        return ok(`Created and verified ${fileName(generated.path)}`, {
+          path: generated.path,
+          title: generated.title,
+          size: generated.size,
+          sha256: generated.sha256,
+          verification: generated.verification,
+          qa: generated.qa,
+        }, {
+          files: [{ path: generated.path, change: "created", detail: "report.create_word" }],
+          verification: {
+            passed: verified,
+            evidence: verified
+              ? `${fileName(generated.path)} passed Open XML structure, content, citation and placeholder checks (${generated.size} bytes; SHA-256 ${generated.sha256.slice(0, 12)}…).`
+              : "The generated report did not pass deterministic delivery checks.",
+            method: "deterministic",
+          },
+          changesUi: false,
+        });
+      }
+      case "office.status": {
+        const response = await call("officeStatus", {});
+        return response.ok ? ok("Checked Microsoft Office", response.result, { changesUi: false }) : failed(response.error);
+      }
+      case "office.create_word":
+      case "office.create_workbook":
+      case "office.create_presentation":
+      case "office.edit_word":
+      case "office.edit_workbook":
+      case "office.edit_presentation":
+      case "office.export_pdf": {
+        const tool = ({
+          "office.create_word": "officeCreateWord",
+          "office.create_workbook": "officeCreateWorkbook",
+          "office.create_presentation": "officeCreatePresentation",
+          "office.edit_word": "officeEditWord",
+          "office.edit_workbook": "officeEditWorkbook",
+          "office.edit_presentation": "officeEditPresentation",
+          "office.export_pdf": "officeExportPdf",
+        } as Record<string, string>)[definition.name];
+        const response = await call(tool, args);
+        if (!response.ok) return failed(response.error);
+        const value = response.result as Record<string, unknown>;
+        const outputPath = String(value.path || args.destination || args.path);
+        const check = await call("statPath", { path: outputPath });
+        const info = check.ok ? check.result as Record<string, unknown> : null;
+        const editing = definition.name.startsWith("office.edit_");
+        const backupPath = editing && typeof value.backup_path === "string" ? value.backup_path : null;
+        const backupCheck = backupPath ? await call("statPath", { path: backupPath }) : null;
+        const backupInfo = backupCheck?.ok ? backupCheck.result as Record<string, unknown> : null;
+        const outputVerified = info?.exists === true && Number(info.size) > 0 && value.verified === true;
+        const backupVerified = !editing || (backupInfo?.exists === true && Number(backupInfo.size) > 0);
+        const verified = outputVerified && backupVerified;
+        const files: Omit<TaskFileRecord, "at">[] = editing
+          ? [
+              { path: outputPath, change: "modified", detail: definition.name },
+              ...(backupPath ? [{ path: backupPath, change: "created" as const, detail: `Automatic backup before ${definition.name}` }] : []),
+            ]
+          : [{ path: outputPath, change: "created", detail: definition.name }];
+        const evidence = editing
+          ? `${fileName(outputPath)} is non-empty, Office verified the edit, and ${backupPath ? fileName(backupPath) : "the backup"} exists.`
+          : `${fileName(outputPath)} exists, is non-empty, and Office reported a successful save.`;
+        return ok(String(value.result || `${editing ? "Updated" : "Created"} ${fileName(outputPath)}`), compact(value, ["path", "backup_path", "size", "sha256", "application", "verified", "verification", "operation", "rows", "cells", "formulas", "formula_results", "charts", "cells_updated", "sheet", "slide", "slides", "embedded_images", "editable_text", "bullets", "characters", "replacements", "source", "before_sha256", "after_sha256"]), {
+          files,
+          verification: { passed: verified, evidence: verified ? evidence : editing ? "The edited file or its automatic backup could not be verified." : "The output file could not be verified.", method: "deterministic" },
+        });
       }
       case "clipboard.copy_files": {
         const response = await call("copyFilesToClipboard", { paths: args.paths });
@@ -624,6 +777,42 @@ export class ActionExecutor {
         const response = await call("getClipboard", { max_chars: 2000 });
         if (!response.ok) return failed(response.error);
         return ok("Read the clipboard", { untrusted_content: String((response.result as Record<string, unknown>)?.text ?? (response.result as Record<string, unknown>)?.result ?? "").slice(0, 2000) }, { changesUi: false });
+      }
+      case "youtube.play":
+      case "youtube.control":
+      case "youtube.state":
+      case "youtube.cancel": {
+        const tool = ({
+          "youtube.play": "youtubePlay",
+          "youtube.control": "youtubeControl",
+          "youtube.state": "youtubeState",
+          "youtube.cancel": "youtubeCancel",
+        } as Record<string, string>)[definition.name];
+        const response = await call(tool, args);
+        if (!response.ok) return failed(response.error, "YouTube control failed");
+        const value = response.result as Record<string, unknown>;
+        const stateChanging = definition.name === "youtube.play" || definition.name === "youtube.control" || definition.name === "youtube.cancel";
+        if (stateChanging && value.verified !== true) {
+          return failed(String(value.error || "YouTube did not return verified player state."), "YouTube outcome was not verified");
+        }
+        const title = short(value.title || "YouTube", 60);
+        const state = String(value.playback_state || value.task_status || (value.active === false ? "inactive" : "checked"));
+        const fields = Array.isArray(value.verified_fields) ? value.verified_fields.map(String) : [];
+        return ok(String(value.result || `${title} — ${state}`), compact(value, [
+          "active", "title", "channel", "url", "video_id", "playlist_id", "playback_state", "stopped",
+          "position_seconds", "duration_seconds", "volume_percent", "muted", "fullscreen",
+          "captions_enabled", "playback_rate", "search_query", "result_index", "selection_kind",
+          "requested_channel", "latest_filter_applied", "channel_constraint_verified", "task_status",
+          "error_code", "error", "verified_fields", "verified",
+        ]), {
+          verification: {
+            passed: definition.name === "youtube.state" || value.verified === true,
+            evidence: definition.name === "youtube.state"
+              ? `Fresh browser/player probe returned ${fields.length ? `verified fields: ${fields.join(", ")}` : "no active verified player"}.`
+              : `The YouTube adapter verified ${fields.length ? fields.join(", ") : "the requested operation"}; active state is ${state}.`,
+            method: "deterministic",
+          },
+        });
       }
       case "browser.open": {
         const response = args.new_tab
@@ -843,6 +1032,27 @@ function describeAction(capability: Capability, action: PlannedAction, context: 
     case "MODIFY_SYSTEM_SETTINGS": return "Change this Windows setting?";
     default: return `${CAPABILITY_INFO[capability].label}: ${definition.progress(action.args)}`;
   }
+}
+
+function officeEditPreview(action: PlannedAction): string {
+  const args = action.args;
+  if (action.tool === "office.edit_word") {
+    if (args.operation === "replace_text") {
+      return `Replace exactly ${Number(args.expected_replacements) || 0} occurrence(s) of "${short(args.find_text, 80)}" with "${short(args.content, 120)}".`;
+    }
+    return `Append ${String(args.content || "").length} character(s): "${short(args.content, 140)}".`;
+  }
+  if (action.tool === "office.edit_workbook") {
+    const updates = Array.isArray(args.updates) ? args.updates as Array<Record<string, unknown>> : [];
+    const sample = updates.slice(0, 8).map((item) => `${item.cell}=${short(JSON.stringify(item.value), 40)}`).join(", ");
+    return `Set ${updates.length} cell(s) on "${short(args.sheet_name, 31)}"${sample ? `: ${sample}${updates.length > 8 ? ", …" : ""}` : ""}.`;
+  }
+  if (action.tool === "office.edit_presentation") {
+    return args.operation === "update_slide"
+      ? `Replace the title/body text on slide ${Number(args.slide_number)}${args.expected_title !== undefined ? ` only if its current title is "${short(args.expected_title, 80)}"` : ""} with title "${short(args.title, 100)}" and ${(args.bullets as unknown[] || []).length} bullet(s).`
+      : `Append one slide with title "${short(args.title, 100)}" and ${(args.bullets as unknown[] || []).length} bullet(s).`;
+  }
+  return short(action.tool, 80);
 }
 
 function compact(value: unknown, keys: string[]): Record<string, unknown> {

@@ -39,6 +39,37 @@ let SERVER_PORT = PREFERRED_PORT;
 // "localhost" can resolve to ::1, where another app on the same port answers.
 let SERVER_ORIGIN = `http://127.0.0.1:${SERVER_PORT}`;
 
+function isTrustedRendererUrl(value) {
+  try {
+    return new URL(value).origin === SERVER_ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
+function openExternalWebUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return;
+    void shell.openExternal(parsed.href);
+  } catch {
+    /* malformed or unsupported URL */
+  }
+}
+
+/** Keep privileged preload bridges and media permissions on Sara's origin. */
+function protectLocalWindow(win, { openExternalLinks = false } = {}) {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (openExternalLinks && !isTrustedRendererUrl(url)) openExternalWebUrl(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isTrustedRendererUrl(url)) return;
+    event.preventDefault();
+    if (openExternalLinks) openExternalWebUrl(url);
+  });
+}
+
 /** Can we listen on 127.0.0.1:port? */
 function portFree(port) {
   return new Promise((resolve) => {
@@ -363,7 +394,9 @@ function installCrashRecovery() {
       if (!isMainFrame || code === -3) return; // -3: aborted by a newer navigation
       failures += 1;
       logCrash(`load failed (${code} ${description}) ${url}`);
-      if (failures <= 8) setTimeout(() => { if (!contents.isDestroyed()) contents.loadURL(url.startsWith('http') ? url : SERVER_ORIGIN); }, Math.min(10_000, 1_500 * failures));
+      if (failures <= 8) setTimeout(() => {
+        if (!contents.isDestroyed()) contents.loadURL(isTrustedRendererUrl(url) ? url : SERVER_ORIGIN);
+      }, Math.min(10_000, 1_500 * failures));
     });
     contents.on('did-finish-load', () => { failures = 0; });
     contents.on('unresponsive', () => {
@@ -496,7 +529,7 @@ function createSplashWindow() {
     skipTaskbar: true,
     backgroundColor: '#00000000',
     icon: APP_ICON,
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   splashWindow.loadFile(path.join(__dirname, 'splash.html'));
   splashWindow.on('closed', () => (splashWindow = null));
@@ -517,21 +550,16 @@ function createMainWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       spellcheck: true,
     },
   });
 
   Menu.setApplicationMenu(null);
 
-  // Open external links (http/https to non-local hosts) in the real browser
-  // instead of navigating the app window.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http') && !url.startsWith(SERVER_ORIGIN)) {
-      shell.openExternal(url);
-      return { action: 'deny' };
-    }
-    return { action: 'allow' };
-  });
+  // External links go to the real browser. The privileged Sara window never
+  // navigates away from its exact loopback origin.
+  protectLocalWindow(mainWindow, { openExternalLinks: true });
 
   mainWindow.once('ready-to-show', () => {
     if (splashWindow) splashWindow.close();
@@ -559,7 +587,8 @@ function createMainWindow() {
   // serialize a live MediaStream through contextBridge.
   // ---------------------------------------------------------------------------
   ipcMain.removeHandler('screen:get-sources');
-  ipcMain.handle('screen:get-sources', async (_event, options) => {
+  ipcMain.handle('screen:get-sources', async (event, options) => {
+    if (!isTrustedRendererUrl(event.senderFrame?.url || event.sender.getURL())) return [];
     try {
       const sources = await desktopCapturer.getSources({
         types: ['screen', 'window'],
@@ -585,7 +614,7 @@ function createMainWindow() {
     const ses = session.defaultSession;
     if (ses && typeof ses.setDisplayMediaRequestHandler === 'function') {
       ses.setDisplayMediaRequestHandler(async (request, callback) => {
-        if (!request.videoRequested || !request.securityOrigin.startsWith(SERVER_ORIGIN)) {
+        if (!request.videoRequested || !isTrustedRendererUrl(request.securityOrigin)) {
           callback({});
           return;
         }
@@ -606,12 +635,12 @@ function createMainWindow() {
       }, { useSystemPicker: false });
     }
     if (ses && typeof ses.setPermissionRequestHandler === 'function') {
-      ses.setPermissionRequestHandler((_wc, permission, callback) => {
-        // Allow mic (for voice) and media-related permissions for the app.
-        if (permission === 'media' || permission === 'microphone' || permission === 'display-capture') {
-          return callback(true);
-        }
-        return callback(false);
+      ses.setPermissionRequestHandler((webContents, permission, callback) => {
+        // Media access belongs only to Sara's exact local renderer. A remote
+        // navigation must never inherit microphone or display permission.
+        const trusted = webContents && isTrustedRendererUrl(webContents.getURL());
+        const mediaPermission = permission === 'media' || permission === 'microphone' || permission === 'display-capture';
+        callback(Boolean(trusted && mediaPermission));
       });
     }
   } catch (err) {
@@ -817,6 +846,7 @@ function startShell() {
 
   ipcMain.removeHandler('dialog:pick-character');
   ipcMain.handle('dialog:pick-character', async (event) => {
+    if (!isTrustedRendererUrl(event.senderFrame?.url || event.sender.getURL())) return null;
     const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined;
     const result = await dialog.showOpenDialog(owner, {
       title: 'Import a character model',

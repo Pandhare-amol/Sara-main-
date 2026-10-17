@@ -142,7 +142,7 @@ export class CognitiveRuntime {
       importance: 0.52,
       metadata: { activity: "cognitive runtime online" },
     });
-    if (this.options.autoStartMind !== false) this.mind.start();
+    if (this.options.autoStartMind !== false && this.config.enabled) this.mind.start();
   }
 
   async process(input: CognitiveEventInput): Promise<CognitionOutcome> {

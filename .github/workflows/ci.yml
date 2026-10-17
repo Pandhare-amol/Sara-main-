@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "arena/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: desktop_agent/requirements.txt
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install desktop-agent dependencies
+        run: python -m pip install -r desktop_agent/requirements.txt
+
+      - name: Type-check
+        run: npm run lint
+
+      # Keep stateful suites in separate processes/steps. Besides preventing
+      # cross-suite timer/store interference, this makes a Windows failure
+      # identify the exact suite rather than hiding it behind one aggregate.
+      - name: Core security and scheduling tests
+        run: node --import tsx --test tests/core.test.ts
+
+      - name: Model routing tests
+        run: node --import tsx --test tests/models.test.ts
+
+      - name: Intelligence tests
+        run: node --import tsx --test tests/intelligence.test.ts
+
+      - name: Knowledge tests
+        run: node --import tsx --test tests/knowledge.test.ts
+
+      - name: Office action tests
+        run: node --import tsx --test tests/officeActions.test.ts
+
+      - name: Structured report tests
+        run: node --import tsx --test tests/reporting.test.ts
+
+      - name: Agent loop tests
+        run: node --import tsx --test tests/agentLoop.test.ts
+
+      - name: Presence tests
+        run: node --import tsx --test tests/presence.test.ts
+
+      - name: Chat target tests
+        run: node --import tsx --test tests/chatOpen.test.ts
+
+      - name: Character tests
+        run: npm run test:characters
+
+      - name: Autonomous mind tests
+        run: node --import tsx --test cognition/tests/autonomousMind.test.ts
+
+      - name: Cognition manager tests
+        run: node --import tsx --test cognition/tests/cognition.test.ts
+
+      - name: API hub importer test
+        run: node --import tsx --test --test-name-pattern="public-apis importer" api_hub/tests/apiHub.test.ts
+
+      - name: API hub registry test
+        run: node --import tsx --test --test-name-pattern="capability registry" api_hub/tests/apiHub.test.ts
+
+      - name: API hub sync test
+        run: node --import tsx --test --test-name-pattern="API hub sync" api_hub/tests/apiHub.test.ts
+
+      - name: API hub adapter policy test
+        run: node --import tsx --test --test-name-pattern="adapter registry" api_hub/tests/apiHub.test.ts
+
+      - name: API hub execution test
+        run: node --import tsx --test --test-name-pattern="verified declarative" api_hub/tests/apiHub.test.ts
+
+      - name: API hub built-in test
+        run: node --import tsx --test --test-name-pattern="built-in adapters" api_hub/tests/apiHub.test.ts
+
+      - name: Screen vision tests
+        run: npm run test:screen-vision
+
+      - name: Browser boundary tests
+        run: npm run test:real-browser
+
+      - name: Optional live-provider tests
+        run: npm run test:live
+
+      - name: Python tests
+        run: npm run test:python
+
+      - name: Production build
+        run: npm run build

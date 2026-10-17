@@ -44,6 +44,14 @@ export interface TaskView {
   error?: string | null;
   steps?: number;
   sensitive?: boolean;
+  checkpoint?: {
+    objective: string; status: string; completedWork: string[]; remainingWork: string[]; decisions: string[]; constraints: string[];
+    changedFiles: Array<{ path: string; change: string; at: string }>;
+    validation: Array<{ at: string; passed: boolean; evidence: string; method: string }>;
+    recoveryAttempts: Array<{ at: string; action: string; outcome: string }>;
+    uncertainActions: Array<{ at: string; tool: string; summary: string }>;
+    nextSafeAction: string; updatedAt: string;
+  };
 }
 
 export type TaskAction = "stop" | "pause" | "resume" | "takeover" | "return" | "answer" | "continue";
@@ -74,7 +82,7 @@ export interface PermissionsView {
 }
 
 /** Mirrors permissions/types.ts LOCKED_TO_ASK: these never go below "ask". */
-export const LOCKED_CAPABILITIES: ReadonlySet<string> = new Set(["EXECUTE_DOWNLOAD", "INSTALL_SOFTWARE", "PURCHASE", "ACCOUNT_CHANGE", "POWER_CONTROL"]);
+export const LOCKED_CAPABILITIES: ReadonlySet<string> = new Set(["OFFICE_WRITE", "EXECUTE_DOWNLOAD", "INSTALL_SOFTWARE", "PURCHASE", "ACCOUNT_CHANGE", "POWER_CONTROL"]);
 
 // ---- models -----------------------------------------------------------------------------
 

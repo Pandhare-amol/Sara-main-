@@ -189,11 +189,14 @@ export class TaskManager {
     if (!previous || previous.state !== "interrupted") throw new Error("That task is not an interrupted task.");
     if (previous.sensitive) throw new Error("Sensitive tasks are never resumed automatically; please ask again.");
     const done = previous.actions.filter((action) => action.status === "ok").slice(-12).map((action) => `- ${action.summary}`);
+    const uncertain = previous.checkpoint.uncertainActions.slice(-8).map((action) => `- ${action.tool}: ${action.summary}`);
     this.deps.store.transition(sessionId, "cancelled", "Continued in a new task.");
     return this.start(previous.goal, "recovery", {
       preface: [
         "This task was interrupted by an application restart. Some steps may already be done — verify the current screen and files before repeating anything.",
         done.length ? `Steps that had succeeded before the restart:\n${done.join("\n")}` : "No steps had completed.",
+        uncertain.length ? `These non-idempotent outcomes were uncertain. NEVER replay them until current state proves they did not happen:\n${uncertain.join("\n")}` : "No uncertain non-idempotent actions were recorded.",
+        `Last checkpoint's next safe action: ${previous.checkpoint.nextSafeAction}`,
       ],
     });
   }
@@ -403,6 +406,9 @@ export class TaskManager {
           s.usage.outputTokens += planned.usage.outputTokens;
           s.modelId = planned.modelId;
           s.plan = { summary: planned.decision.situation, steps: planned.decision.plan.map((text, index) => ({ text, status: index === 0 ? "active" : "pending" })) };
+          s.checkpoint.status = planned.decision.situation;
+          s.checkpoint.remainingWork = planned.decision.plan.slice(0, 20);
+          s.checkpoint.nextSafeAction = planned.decision.plan[0] || "Re-observe and verify the task outcome.";
         });
         plan = planned.decision.plan;
         recoveryAdvice = null;
@@ -550,9 +556,28 @@ export class TaskManager {
       failureCategory: result.category,
       verification: result.verification,
     });
+    this.deps.store.update(session.id, (s) => {
+      const at = new Date().toISOString();
+      if (result.ok) s.checkpoint.completedWork.push(result.summary);
+      else s.checkpoint.recoveryAttempts.push({ at, action: action.tool, outcome: result.error || result.summary });
+      if (result.verification) s.checkpoint.validation.push({ at, passed: result.verification.passed, evidence: result.verification.evidence, method: result.verification.method });
+      const consequential = action.tool === "chat.send" || action.tool === "fs.delete" || action.tool.startsWith("office.")
+        || (action.tool === "ui.type" && action.args.submit === true)
+        || (action.tool === "keyboard.press" && /^(enter|return)$/i.test(String(action.args.key || "")));
+      if (consequential && result.ok && (!result.verification || !result.verification.passed)) {
+        s.checkpoint.uncertainActions.push({ at, tool: action.tool, summary: result.summary });
+        s.checkpoint.nextSafeAction = `Observe current state and verify whether ${result.summary.toLowerCase()} occurred; do not repeat it yet.`;
+      } else {
+        s.checkpoint.nextSafeAction = result.ok ? "Observe and verify the latest action before continuing." : "Use a different bounded recovery strategy; do not blindly repeat the failed action.";
+      }
+    });
     if (result.files?.length) {
       this.deps.store.update(session.id, (s) => {
-        for (const file of result.files!) s.files.push({ ...file, at: new Date().toISOString() });
+        for (const file of result.files!) {
+          const record = { ...file, at: new Date().toISOString() };
+          s.files.push(record);
+          s.checkpoint.changedFiles.push(record);
+        }
       });
       for (const file of result.files) {
         this.deps.working.noteReferent({ kind: /\.(png|jpe?g|gif|webp|bmp|heic)$/i.test(file.path) ? "image" : "file", label: file.path.split(/[\\/]/).pop() || file.path, value: file.path, source: file.change === "downloaded" ? "download" : "task" });
