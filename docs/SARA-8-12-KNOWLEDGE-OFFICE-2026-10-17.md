@@ -185,7 +185,7 @@ Local validation for this branch state:
 - production dependency audit (`npm audit --omit=dev`): 0 findings;
 - full audit: 8 existing moderate Electron Builder transitive findings; the suggested forced change remains a breaking build-chain change and was not applied without installer regression evidence.
 
-Windows CI and real Office execution are recorded separately after the branch is pushed.
+Windows CI passed on the implementation commit `a8ab47f`: push run [`38993686878`](https://github.com/Pandhare-amol/Sara-main-/actions/runs/38993686878) completed in 1m46s and PR run [`38993690538`](https://github.com/Pandhare-amol/Sara-main-/actions/runs/38993690538) completed in 1m41s. Both exercised dependency installation, type-check, Node suites, Python suites and production build on `windows-latest`. This validates Windows CI compatibility; it does **not** prove live Office COM behavior because the hosted runner does not provide a licensed desktop Office installation.
 
 ## 6. Honest remaining limits and external blockers
 
