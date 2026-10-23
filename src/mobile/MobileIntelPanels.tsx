@@ -12,7 +12,8 @@ import {
 } from "lucide-react";
 import {
   api, type AppSettings, type CallRecordView, type CallSettingsView, type CapabilityCatalogue, type DiagnosticState,
-  type InboundMessageView, type MobileAutomations, type MobileBriefing, type MobileDiagnostics, type PersonaSettings,
+  type InboundMessageView, type MobileAutomations, type MobileBriefing, type MobileDiagnostics, type OperationView,
+  type PersonaSettings,
   type ProviderView, type RealitySettings, type SendOutcomeView,
 } from "../lib/appApi";
 import { getServerConfig } from "../lib/serverConfig";
@@ -1146,5 +1147,127 @@ export function CapabilityList() {
         </div>
       ))}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ activity */
+
+const OP_TONE: Record<string, string> = {
+  SUCCESS: "text-emerald-200/85",
+  FAILED: "text-rose-200/85",
+  UNCERTAIN: "text-amber-200/85",
+  CANCELLED: "text-white/40",
+  RUNNING: "text-cyan-200/85",
+  NEEDS_APPROVAL: "text-amber-200/85",
+};
+
+/**
+ * Receipts. Each row is one action the executor actually ran, with its honest
+ * status — SUCCESS without a verification note means "executed, not
+ * independently checked", which is exactly what is shown.
+ */
+export function ActivityPanel({ onClose }: { onClose: () => void }) {
+  const [operations, setOperations] = useState<OperationView[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setOperations((await api.operations(40)).operations);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const undo = async (id: string) => {
+    setBusyId(id);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.undoOperation(id);
+      setNotice(result.ok ? `Undone: ${result.label}` : `Could not undo: ${result.result?.error || result.label}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <Sheet
+      title="Activity"
+      subtitle="Every action with the outcome the executor actually reported — not an optimistic summary."
+      onClose={onClose}
+      actions={
+        <button type="button" onClick={() => void load()} aria-label="Refresh activity" className="mt-1 rounded-lg p-1.5 text-white/45 hover:text-white">
+          <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+        </button>
+      }
+    >
+      <div className="space-y-3">
+        {error && <Card tone="warn"><p className="text-[11px] leading-relaxed text-amber-100/85">{error}</p></Card>}
+        {notice && <Card tone="ok"><p className="text-[11px] leading-relaxed text-emerald-100/85">{notice}</p></Card>}
+
+        {loading && operations.length === 0 ? (
+          <div className="flex justify-center py-10"><Loader2 size={16} className="animate-spin text-white/30" /></div>
+        ) : operations.length === 0 ? (
+          <p className="text-[11px] leading-relaxed text-white/35">
+            Nothing has run yet. When Sara uses your PC or changes something, the receipt appears here.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {operations.map((operation) => (
+              <div key={operation.id} className="rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-[11px] text-white/80">{operation.summary || operation.tool}</p>
+                    <p className="mt-0.5 font-mono text-[9px] uppercase tracking-wider text-white/25">
+                      {operation.tool} · {new Date(operation.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {operation.durationMs !== null ? ` · ${operation.durationMs} ms` : ""}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <span className={`block font-mono text-[9px] uppercase tracking-wider ${OP_TONE[operation.status] ?? "text-white/40"}`}>
+                      {operation.status}
+                    </span>
+                    <span className="mt-0.5 block font-mono text-[8px] uppercase tracking-wider text-white/20">
+                      {operation.status === "SUCCESS" ? (operation.verified ? "verified" : "unverified") : "—"}
+                    </span>
+                  </div>
+                </div>
+
+                {operation.verification && <p className="mt-1 text-[10px] leading-relaxed text-white/35">{operation.verification}</p>}
+                {operation.error && <p className="mt-1 text-[10px] leading-relaxed text-rose-200/60">{operation.error}</p>}
+
+                {operation.undo && operation.undoState === "available" && (
+                  <button type="button" disabled={busyId === operation.id} onClick={() => void undo(operation.id)}
+                    className="mt-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] text-white/70 disabled:opacity-40">
+                    {busyId === operation.id ? "Undoing…" : operation.undo.destructive ? `Undo (${operation.undo.label})` : "Undo"}
+                  </button>
+                )}
+                {operation.undoState === "done" && <p className="mt-1 font-mono text-[9px] uppercase tracking-wider text-emerald-200/50">undone</p>}
+                {operation.undoState === "failed" && <p className="mt-1 font-mono text-[9px] uppercase tracking-wider text-rose-200/60">undo failed</p>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="pb-1 text-[10px] leading-relaxed text-white/25">
+          A move is not offered for undo: when the destination is a folder, the final path depends on the desktop agent, and guessing it could
+          move the wrong file back. Renames, copies and created files are reversible.
+        </p>
+      </div>
+    </Sheet>
   );
 }

@@ -260,6 +260,29 @@ export interface OutgoingCallPlan {
   candidates?: Array<{ id: string; displayName: string }>;
 }
 
+// ---- operation receipts (operations/journal.ts) -------------------------------------------
+
+export type OperationStatus = "RUNNING" | "SUCCESS" | "FAILED" | "UNCERTAIN" | "CANCELLED" | "NEEDS_APPROVAL";
+export type UndoState = "none" | "available" | "done" | "failed" | "unavailable";
+
+export interface OperationView {
+  id: string;
+  at: string;
+  endedAt: string | null;
+  taskId: string | null;
+  tool: string;
+  args: string;
+  status: OperationStatus;
+  verified: boolean;
+  verification: string | null;
+  summary: string;
+  error: string | null;
+  durationMs: number | null;
+  undo: { tool: string; label: string; destructive: boolean } | null;
+  undoState: UndoState;
+  undoneAt: string | null;
+}
+
 // ---- capabilities (capabilities/registry.ts) --------------------------------------------
 
 export type CapabilityStatus = "AVAILABLE" | "NEEDS_PERMISSION" | "UNAVAILABLE" | "NOT_SUPPORTED" | "UNKNOWN";
@@ -427,6 +450,11 @@ export const api = {
   saveCallMessage: (id: string, text: string) => request<{ ok: boolean; message: CallMessageView }>("POST", `/api/calls/${encodeURIComponent(id)}/message`, { text }),
   outgoingCall: (input: { query?: string; number?: string; purpose?: string; confirmed?: boolean }) =>
     request<OutgoingCallPlan>("POST", "/api/calls/outgoing", input),
+
+  // Operation receipts and undo.
+  operations: (limit = 40) => request<{ operations: OperationView[] }>("GET", `/api/operations?limit=${limit}`),
+  undoOperation: (id: string) =>
+    request<{ ok: boolean; label: string; result: { summary: string; error?: string } }>("POST", `/api/operations/${encodeURIComponent(id)}/undo`, {}),
 
   // Capabilities and messaging.
   capabilities: () => request<CapabilityCatalogue>("GET", "/api/capabilities"),

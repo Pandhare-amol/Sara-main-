@@ -18,7 +18,9 @@ import { useMobileSession } from "./useMobileSession";
 import { useMobilePrefs, useKeyboardInset } from "./mobilePrefs";
 import { MobileStage, accentFor } from "./MobileStage";
 import { DevicePanel, HelpPanel, HistoryPanel, MemoryPanel, MissionsPanel, SettingsPanel, type MobileSheet } from "./MobilePanels";
-import { AutomationsPanel, BriefingPanel, CallsPanel, DiagnosticsPanel, MessagesPanel, PersonaPanel, StopPanel, VisionPanel } from "./MobileIntelPanels";
+import {
+  ActivityPanel, AutomationsPanel, BriefingPanel, CallsPanel, DiagnosticsPanel, MessagesPanel, PersonaPanel, StopPanel, VisionPanel,
+} from "./MobileIntelPanels";
 import { installNativeShell, setNativeBackHandler } from "./native";
 
 const THEME_STORAGE = "sara.mobile.theme.v1";
@@ -364,6 +366,7 @@ export function MobileApp() {
               ["history", History, "Conversation"],
               ["missions", Activity, "Missions"],
               ["automations", Activity, "Automations"],
+              ["activity", History, "Activity"],
               ["memory", Brain, "Memory"],
               ["calls", Phone, "Calls"],
               ["messages", MessageSquare, "Messages"],
@@ -425,6 +428,7 @@ export function MobileApp() {
       {sheet === "selfcheck" && <DiagnosticsPanel onClose={() => setSheet(null)} />}
       {sheet === "calls" && <CallsPanel onClose={() => setSheet(null)} />}
       {sheet === "messages" && <MessagesPanel onClose={() => setSheet(null)} />}
+      {sheet === "activity" && <ActivityPanel onClose={() => setSheet(null)} />}
     </div>
   );
 }

@@ -29,6 +29,7 @@ import { registerMessagingRoutes } from "../communication/messaging/routes";
 import { readWhatsAppConfig, WhatsAppCloudProvider } from "../communication/messaging/whatsappCloud";
 import { createDeviceGuard, readDeviceToken } from "../shared/deviceAuth";
 import { ContactBook } from "../memory/contacts";
+import { OperationJournal } from "../operations/journal";
 import { WorkingMemory } from "../memory/workingMemory";
 import { ModelRegistry } from "../models/registry";
 import { ModelRouter } from "../models/router";
@@ -91,6 +92,7 @@ export class MyraaRuntime {
   readonly downloads: DownloadManager;
   readonly contacts: ContactBook;
   readonly calls: CallManager;
+  readonly operations: OperationJournal;
   readonly messaging: MessagingHub;
   readonly capabilities = new CapabilityRegistry();
   private readonly deviceToken: string | null = readDeviceToken();
@@ -129,6 +131,7 @@ export class MyraaRuntime {
     });
     this.contacts = new ContactBook(dataDir);
     this.audit = new AuditLog(dataDir);
+    this.operations = new OperationJournal({ dataDir });
     // Phone events arrive from an authorised device; the manager owns call
     // state, the answering policy and the command queue for that device.
     this.calls = new CallManager({
@@ -165,6 +168,7 @@ export class MyraaRuntime {
       downloads: this.downloads,
       contacts: this.contacts,
       audit: this.audit,
+      journal: this.operations,
       remember: (fact, kind) => options.remember(fact, kind === "preference" ? "preference" : "semantic", 0.7),
       notify: (title, body) => this.notify(title, body),
       conflictWaitMs: this.currentSettings.autonomy.conflictWaitSec * 1000,
@@ -201,6 +205,7 @@ export class MyraaRuntime {
     this.currentSettings = await this.settings.initialize(this.options.legacySettings);
     await Promise.all([
       this.registry.initialize(),
+      this.operations.initialize(),
       this.permissions.initialize(),
       this.tasks.initialize(),
       this.downloads.initialize(),
@@ -569,6 +574,56 @@ export class MyraaRuntime {
         if (!res.headersSent) res.status(status).json({ error: error instanceof ModelError ? error.userMessage : error instanceof Error ? error.message : String(error) });
       }
     };
+
+    // ---- operation receipts and undo -------------------------------------------
+    app.get("/api/operations", wrap((req) => {
+      const limit = Number(req.query.limit) || 50;
+      const taskId = typeof req.query.taskId === "string" ? req.query.taskId : undefined;
+      return { operations: this.operations.list(limit, taskId) };
+    }));
+
+    app.get("/api/operations/:id", wrap((req) => {
+      const operation = this.operations.get(String(req.params.id));
+      if (!operation) {
+        const error = new Error("That operation is not in Sara's journal.");
+        (error as { status?: number }).status = 404;
+        throw error;
+      }
+      return { operation };
+    }));
+
+    app.post("/api/operations/:id/undo", wrap(async (req) => {
+      const id = String(req.params.id);
+      if (!this.operations.get(id)) {
+        const error = new Error("That operation is not in Sara's journal.");
+        (error as { status?: number }).status = 404;
+        throw error;
+      }
+      const claimed = await this.operations.beginUndo(id);
+      if (!claimed) {
+        const error = new Error("That action cannot be undone from here.");
+        (error as { status?: number }).status = 409;
+        throw error;
+      }
+      const scope = rootScope.child("undo");
+      const timer = setTimeout(() => scope.cancel("undo_timeout"), 120_000);
+      timer.unref?.();
+      try {
+        const result = await this.executor.execute(
+          { tool: claimed.action.tool, args: claimed.action.args },
+          { taskId: `undo:${claimed.record.id}`, goal: `Undo: ${claimed.action.label}`, state: null, scope },
+        );
+        const undoOperationId = this.operations.list(5).find((item) => item.taskId === `undo:${claimed.record.id}`)?.id ?? null;
+        await this.operations.settleUndo(claimed.record.id, result.ok, undoOperationId);
+        this.audit.record(null, "recovery", `Undo ${result.ok ? "completed" : "failed"}: ${claimed.action.label}`);
+        return { ok: result.ok, label: claimed.action.label, result };
+      } catch (error) {
+        await this.operations.settleUndo(claimed.record.id, false, null);
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }));
 
     const device = createDeviceGuard(this.deviceToken);
 
