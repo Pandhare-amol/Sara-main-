@@ -219,13 +219,14 @@ jobs:
           "$AAPT" dump xmltree --file AndroidManifest.xml "$APK" > manifest.txt
           "$AAPT" dump xmltree --file res/xml/network_security_config.xml "$APK" > nsc.txt 2>/dev/null || true
 
-          grep -i "cleartext" manifest.txt | head -3 | while IFS= read -r line; do echo "::warning::manifest: $line"; done || true
-          grep -i "cleartext" nsc.txt | head -3 | while IFS= read -r line; do echo "::warning::network config: $line"; done || true
+          # aapt2 prints booleans as `=true` (older builds print a 0xffffffff int).
+          echo "manifest:"; grep -i "cleartext" manifest.txt | head -3 || true
+          echo "network config:"; grep -i "cleartext" nsc.txt | head -3 || true
 
           MANIFEST_OK=0
-          if grep -qiE "usesCleartextTraffic.*0xffffffff" manifest.txt; then MANIFEST_OK=1; fi
+          if grep -qiE "usesCleartextTraffic.*(=true|0xffffffff)" manifest.txt; then MANIFEST_OK=1; fi
           NSC_OK=0
-          if grep -qiE "cleartextTrafficPermitted.*0xffffffff" nsc.txt; then NSC_OK=1; fi
+          if grep -qiE "cleartextTrafficPermitted.*(=true|0xffffffff)" nsc.txt; then NSC_OK=1; fi
 
           if [ "$MANIFEST_OK" = "1" ] || [ "$NSC_OK" = "1" ]; then
             echo "Cleartext http allowed in this debug APK (manifest=$MANIFEST_OK, network config=$NSC_OK)."
