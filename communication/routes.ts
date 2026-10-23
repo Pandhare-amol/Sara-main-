@@ -9,8 +9,8 @@
  *  - the **UI** uses the normal session/remote-access guard that already wraps
  *    every `/api` route.
  */
-import { timingSafeEqual } from "node:crypto";
 import type { Express, Request, Response } from "express";
+import { createDeviceGuard } from "../shared/deviceAuth";
 import type { AppSettings } from "../settings/appSettings";
 import type { CallManager } from "./callManager";
 import type { CallEventInput } from "./types";
@@ -37,34 +37,12 @@ const POLICY_KEYS = [
   "maxCallMinutes",
 ] as const;
 
-function safeEqual(expected: string, provided: string | undefined): boolean {
-  if (!provided) return false;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(provided);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
-
 export function registerCallRoutes(app: Express, deps: CallRoutesDeps): void {
   const fail = (res: Response, error: unknown, status = 500) => {
     res.status(status).json({ error: error instanceof Error ? error.message : String(error) });
   };
 
-  /** Device auth. A missing server token is a configuration error, not a bypass. */
-  const device = (req: Request, res: Response): boolean => {
-    if (!deps.deviceToken) {
-      res.status(503).json({
-        error: "Phone events are not enabled: set SARA_CALL_DEVICE_TOKEN on the server and in the phone app.",
-        code: "DEVICE_TOKEN_NOT_CONFIGURED",
-      });
-      return false;
-    }
-    if (!safeEqual(deps.deviceToken, req.header("x-sara-device-token") || undefined)) {
-      res.status(401).json({ error: "Device token rejected.", code: "DEVICE_UNAUTHORIZED" });
-      return false;
-    }
-    return true;
-  };
+  const device = createDeviceGuard(deps.deviceToken);
 
   /* ------------------------------------------------------------ phone side */
 

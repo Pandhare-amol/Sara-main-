@@ -53,7 +53,7 @@ async function run() {
   }
 
   // Menu-driven panels.
-  for (const panelTitle of ["Today", "Calls", "Automations", "Look at this", "How she talks", "Memory", "Connection", "Settings", "Self-check", "Help & diagnostics"]) {
+  for (const panelTitle of ["Today", "Calls", "Messages", "Automations", "Look at this", "How she talks", "Memory", "Connection", "Settings", "Self-check", "Help & diagnostics"]) {
     clickByLabel("Open menu");
     await sleep(150);
     check(`menu item "${panelTitle}" present`, clickByText(panelTitle));
@@ -110,6 +110,29 @@ async function run() {
   check("calls panel refuses to fake unknown-caller answering", callText.includes("never answers an unknown number"));
   clickByLabel("Close");
   await sleep(200);
+
+  // Messages: the inbox shows classification and a send needs a second tap.
+  clickByLabel("Open menu");
+  await sleep(150);
+  clickByText("Messages");
+  await sleep(500);
+  const msgText = document.body.textContent || "";
+  check("messages panel lists the connector", msgText.includes("WhatsApp (Cloud API)"));
+  check("messages panel shows the inbound message", msgText.includes("send the proposal by Friday"));
+  check("messages panel explains importance", msgText.includes("urgency or a deadline"));
+  const prepare = Array.from(document.querySelectorAll("button")).find((n) => (n.textContent || "").includes("Prepare message"));
+  check("messages cannot send without a draft", Boolean(prepare && (prepare as HTMLButtonElement).disabled));
+  clickByLabel("Close");
+  await sleep(200);
+
+  // Self-check now lists capabilities, including what is unavailable.
+  clickByLabel("Open menu");
+  await sleep(150);
+  clickByText("Self-check");
+  await sleep(500);
+  const capText = document.body.textContent || "";
+  check("self-check lists capabilities", capText.includes("What this setup can do"));
+  check("self-check marks unavailable capabilities", capText.includes("unavailable"));
 
   // Stop: two-step arming, never a single accidental tap.
   clickByLabel("Open menu");

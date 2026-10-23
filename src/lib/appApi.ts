@@ -260,6 +260,59 @@ export interface OutgoingCallPlan {
   candidates?: Array<{ id: string; displayName: string }>;
 }
 
+// ---- capabilities (capabilities/registry.ts) --------------------------------------------
+
+export type CapabilityStatus = "AVAILABLE" | "NEEDS_PERMISSION" | "UNAVAILABLE" | "NOT_SUPPORTED" | "UNKNOWN";
+
+export interface CapabilityView {
+  id: string;
+  label: string;
+  area: string;
+  platform: string;
+  risk: "low" | "medium" | "high" | "critical";
+  status: CapabilityStatus;
+  permissions: string[];
+  detail: string;
+  verification: string;
+  tool?: string;
+}
+
+export interface CapabilityCatalogue {
+  capabilities: CapabilityView[];
+  available: string[];
+  summary: string;
+  devices: Array<{ deviceId: string; platform: string; reportedAt: string; count: number }>;
+}
+
+// ---- messaging (communication/messaging) -------------------------------------------------
+
+export interface ProviderView { id: string; label: string; status: { ok: boolean; detail: string } }
+
+export interface InboundMessageView {
+  id: string;
+  provider: string;
+  conversationId: string;
+  fromId: string;
+  fromName: string | null;
+  text: string;
+  at: string;
+  unread: boolean;
+  importance: "high" | "normal" | "low";
+  reason: string;
+}
+
+export interface SendOutcomeView {
+  status: "SENT" | "FAILED" | "UNCERTAIN" | "REQUIRES_APPROVAL" | "NOT_SUPPORTED" | "PERMISSION_DENIED";
+  verified: boolean;
+  provider: string;
+  to: string;
+  detail: string;
+  providerMessageId?: string;
+  approvalId?: string;
+  preview?: string;
+  error?: { code: string; message: string; retryable: boolean };
+}
+
 // ---- mobile composition API (server_mobileApi.ts) ----------------------------------------
 
 export interface MobileBriefing {
@@ -374,6 +427,15 @@ export const api = {
   saveCallMessage: (id: string, text: string) => request<{ ok: boolean; message: CallMessageView }>("POST", `/api/calls/${encodeURIComponent(id)}/message`, { text }),
   outgoingCall: (input: { query?: string; number?: string; purpose?: string; confirmed?: boolean }) =>
     request<OutgoingCallPlan>("POST", "/api/calls/outgoing", input),
+
+  // Capabilities and messaging.
+  capabilities: () => request<CapabilityCatalogue>("GET", "/api/capabilities"),
+  messagingStatus: () => request<{ providers: ProviderView[]; webhookConfigured: boolean }>("GET", "/api/messaging/status"),
+  messagingSummary: () =>
+    request<{ total: number; unread: number; important: number; byProvider: Record<string, number>; highlights: InboundMessageView[] }>("GET", "/api/messaging/summary"),
+  messages: (query = "") => request<{ messages: InboundMessageView[] }>("GET", `/api/messaging/messages${query ? `?${query}` : ""}`),
+  sendMessage: (input: { provider: string; to: string; text: string; confirmed?: boolean }) =>
+    request<SendOutcomeView>("POST", "/api/messaging/send", input),
 
   // Mobile composition endpoints. They read the same stores as the desktop UI.
   briefing: () => request<MobileBriefing>("GET", "/api/mobile/briefing"),

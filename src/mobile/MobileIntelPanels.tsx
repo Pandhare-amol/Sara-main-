@@ -8,11 +8,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Bell, Camera, CheckCircle2, CircleAlert, CircleDot, Clock, Loader2, OctagonX, RefreshCw,
-  ShieldCheck, Sparkles, TriangleAlert, XCircle,
+  Send, ShieldCheck, Sparkles, TriangleAlert, XCircle,
 } from "lucide-react";
 import {
-  api, type AppSettings, type CallRecordView, type CallSettingsView, type DiagnosticState,
-  type MobileAutomations, type MobileBriefing, type MobileDiagnostics, type PersonaSettings, type RealitySettings,
+  api, type AppSettings, type CallRecordView, type CallSettingsView, type CapabilityCatalogue, type DiagnosticState,
+  type InboundMessageView, type MobileAutomations, type MobileBriefing, type MobileDiagnostics, type PersonaSettings,
+  type ProviderView, type RealitySettings, type SendOutcomeView,
 } from "../lib/appApi";
 import { getServerConfig } from "../lib/serverConfig";
 import {
@@ -291,6 +292,8 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
               </div>
             );
           })}
+          <SectionTitle>What this setup can do</SectionTitle>
+          <CapabilityList />
         </div>
       )}
     </Sheet>
@@ -955,5 +958,193 @@ export function CallsPanel({ onClose }: { onClose: () => void }) {
         </p>
       </div>
     </Sheet>
+  );
+}
+
+/* ----------------------------------------------------------------- messages */
+
+/**
+ * Unified inbox + send flow.
+ *
+ * Every send goes through the server's approval path: the first tap prepares a
+ * draft and shows exactly what would be sent; only the confirmed call sends.
+ * The status shown is the provider's own verdict (SENT / UNCERTAIN / FAILED).
+ */
+export function MessagesPanel({ onClose }: { onClose: () => void }) {
+  const [messages, setMessages] = useState<InboundMessageView[]>([]);
+  const [providers, setProviders] = useState<ProviderView[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [to, setTo] = useState("");
+  const [text, setText] = useState("");
+  const [outcome, setOutcome] = useState<SendOutcomeView | null>(null);
+  const [sending, setSending] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [inbox, status] = await Promise.all([api.messages("limit=30"), api.messagingStatus()]);
+      setMessages(inbox.messages);
+      setProviders(status.providers);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const ready = providers.find((provider) => provider.status.ok);
+  const send = async (confirmed: boolean) => {
+    setSending(true);
+    setError(null);
+    try {
+      const result = await api.sendMessage({ provider: ready?.id || "whatsapp", to: to.trim(), text: text.trim(), confirmed });
+      setOutcome(result);
+      if (result.status === "SENT") {
+        setText("");
+        await load();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <Sheet title="Messages" subtitle="Only official provider APIs. Nothing is scraped, and nothing is sent without your approval." onClose={onClose}>
+      <div className="space-y-4">
+        {error && <Card tone="warn"><p className="text-[11px] leading-relaxed text-amber-100/85">{error}</p></Card>}
+
+        <div>
+          <SectionTitle>Connectors</SectionTitle>
+          <div className="space-y-2">
+            {providers.map((provider) => (
+              <div key={provider.id} className="flex items-start gap-2.5 rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2">
+                <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${provider.status.ok ? "bg-emerald-400/80" : "bg-white/20"}`} />
+                <div className="min-w-0">
+                  <p className="text-xs text-white/80">{provider.label}</p>
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-white/35">{provider.status.detail}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <SectionTitle>Send</SectionTitle>
+          <div className="space-y-2">
+            <input value={to} onChange={(event) => setTo(event.target.value)} placeholder="Number (with country code)" aria-label="Recipient"
+              className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[12px] text-white outline-none placeholder:text-white/25" />
+            <textarea value={text} onChange={(event) => setText(event.target.value)} rows={3} placeholder="Message" aria-label="Message text"
+              className="w-full resize-none rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[12px] text-white outline-none placeholder:text-white/25" />
+            <button type="button" disabled={!text.trim() || !to.trim() || sending || !ready}
+              onClick={() => void send(false)}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-white/10 py-2.5 text-xs text-white/85 disabled:opacity-30">
+              {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+              Prepare message
+            </button>
+            {!ready && <p className="text-[10px] leading-relaxed text-white/30">No messaging provider is configured on the server, so nothing can be sent yet.</p>}
+          </div>
+
+          {outcome && (
+            <div className="mt-2">
+              <Card tone={outcome.status === "SENT" ? "ok" : outcome.status === "REQUIRES_APPROVAL" ? "warn" : "warn"}>
+                <p className="text-[11px] font-medium text-white/85">{outcome.status}</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-white/55">{outcome.detail}</p>
+                {outcome.status === "REQUIRES_APPROVAL" && (
+                  <div className="mt-2 flex gap-2">
+                    <button type="button" disabled={sending} onClick={() => void send(true)}
+                      className="flex-1 rounded-lg bg-emerald-500/20 py-1.5 text-[11px] text-emerald-100 ring-1 ring-emerald-400/30">
+                      Send it
+                    </button>
+                    <button type="button" onClick={() => setOutcome(null)}
+                      className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-white/60">
+                      Cancel
+                    </button>
+                  </div>
+                )}
+                {outcome.status === "UNCERTAIN" && (
+                  <p className="mt-1 text-[10px] leading-relaxed text-amber-100/60">
+                    The provider did not confirm, so Sara will not claim it was delivered.
+                  </p>
+                )}
+              </Card>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <SectionTitle>Inbox</SectionTitle>
+          {loading && messages.length === 0 ? (
+            <div className="flex justify-center py-8"><Loader2 size={16} className="animate-spin text-white/30" /></div>
+          ) : messages.length === 0 ? (
+            <p className="text-[11px] leading-relaxed text-white/35">
+              No messages stored. Inbound WhatsApp messages appear here after the Cloud API webhook is configured.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {messages.map((message) => (
+                <div key={`${message.provider}-${message.id}`} className="rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="truncate text-xs text-white/85">{message.fromName || message.fromId}</span>
+                    <span className={`shrink-0 font-mono text-[9px] uppercase tracking-wider ${message.importance === "high" ? "text-amber-300/80" : "text-white/25"}`}>
+                      {message.importance}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-3 text-[11px] leading-relaxed text-white/60">{message.text}</p>
+                  <p className="mt-1 font-mono text-[9px] text-white/20">{message.reason} · {new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </Sheet>
+  );
+}
+
+/** Capability list for the Self-check panel: what can actually run here. */
+export function CapabilityList() {
+  const [data, setData] = useState<CapabilityCatalogue | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.capabilities()
+      .then((catalogue) => !cancelled && setData(catalogue))
+      .catch((err: unknown) => !cancelled && setError(err instanceof Error ? err.message : String(err)));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error) return <p className="text-[11px] text-rose-200/70">{error}</p>;
+  if (!data) return <div className="flex justify-center py-4"><Loader2 size={14} className="animate-spin text-white/30" /></div>;
+
+  return (
+    <div className="space-y-1.5">
+      {data.capabilities.map((capability) => (
+        <div key={capability.id} className="flex items-start gap-2 border-b border-white/5 py-1.5 last:border-0">
+          <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
+            capability.status === "AVAILABLE" ? "bg-emerald-400/80"
+              : capability.status === "NEEDS_PERMISSION" ? "bg-amber-300/80"
+                : "bg-white/20"
+          }`} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-[11px] text-white/75">{capability.label}</span>
+              <span className="shrink-0 font-mono text-[9px] uppercase tracking-wider text-white/30">{capability.status.toLowerCase().replace(/_/g, " ")}</span>
+            </div>
+            <p className="mt-0.5 text-[10px] leading-relaxed text-white/35">{capability.detail}</p>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }

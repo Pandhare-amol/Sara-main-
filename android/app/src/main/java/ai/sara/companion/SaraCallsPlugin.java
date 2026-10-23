@@ -102,6 +102,7 @@ public class SaraCallsPlugin extends Plugin {
             return;
         }
         beginListening();
+        reportCapabilities();
         call.resolve(status());
     }
 
@@ -112,6 +113,7 @@ public class SaraCallsPlugin extends Plugin {
             return;
         }
         beginListening();
+        reportCapabilities();
         call.resolve(status());
     }
 
@@ -294,6 +296,65 @@ public class SaraCallsPlugin extends Plugin {
             return;
         }
         executor().execute(() -> http("POST", "/api/calls/events", payload.toString()));
+    }
+
+    /**
+     * Tell the server what this build can actually do. Only real, implemented
+     * capabilities are reported, and permission-dependent ones carry their live
+     * permission state — a missing permission is NEEDS_PERMISSION, not a hope.
+     */
+    private void reportCapabilities() {
+        JSONArray capabilities = new JSONArray();
+        try {
+            capabilities.put(capability("phone.call.events", "AVAILABLE", new String[]{"READ_PHONE_STATE"},
+                    "Call-state broadcasts are reported to Sara while the app runs."));
+            capabilities.put(capability("phone.call.place",
+                    hasCallPermission() ? "AVAILABLE" : "NEEDS_PERMISSION",
+                    new String[]{"CALL_PHONE"},
+                    "Sara can dial a call you already approved."));
+            capabilities.put(capability("phone.call.answer",
+                    hasAnswerPermission() ? "AVAILABLE" : "NEEDS_PERMISSION",
+                    new String[]{"ANSWER_PHONE_CALLS"},
+                    "Answering depends on the system dialer role; otherwise Android refuses."));
+            capabilities.put(capability("phone.call.end",
+                    hasAnswerPermission() ? "AVAILABLE" : "NEEDS_PERMISSION",
+                    new String[]{"ANSWER_PHONE_CALLS"},
+                    "Hanging up needs the same dialer role."));
+            capabilities.put(capability("phone.call.speak_audio", "NOT_SUPPORTED", new String[]{},
+                    "Android reserves in-call audio for the system dialer; Sara cannot speak into a cellular call."));
+        } catch (Exception error) {
+            Log.w(TAG, "Could not build the capability report: " + error.getMessage());
+        }
+
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("deviceId", deviceId);
+            payload.put("platform", "android");
+            payload.put("appVersion", appVersionName());
+            payload.put("capabilities", capabilities);
+        } catch (Exception ignored) {
+            return;
+        }
+        if (poller != null) {
+            poller.execute(() -> http("POST", "/api/capabilities/report", payload.toString()));
+        }
+    }
+
+    private String appVersionName() {
+        try {
+            return getContext().getPackageManager().getPackageInfo(getContext().getPackageName(), 0).versionName;
+        } catch (Exception error) {
+            return "unknown";
+        }
+    }
+
+    private static JSONObject capability(String id, String status, String[] permissions, String detail) throws Exception {
+        JSONObject item = new JSONObject();
+        item.put("id", id);
+        item.put("status", status);
+        item.put("permissions", new JSONArray(java.util.Arrays.asList(permissions)));
+        item.put("detail", detail);
+        return item;
     }
 
     private void startPoller() {

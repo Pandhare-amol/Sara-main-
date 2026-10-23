@@ -739,6 +739,20 @@ async function startServer() {
     onEmergencyStop: () => {
       toolExecutor.cancelAll();
     },
+    agentHealth: async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2_500);
+      try {
+        const response = await fetch(`${DESKTOP_AGENT_URL}/health`, { signal: controller.signal });
+        if (!response.ok) return { online: false, toolCount: null };
+        const body = (await response.json()) as { tool_count?: number };
+        return { online: true, toolCount: typeof body.tool_count === "number" ? body.tool_count : null };
+      } catch {
+        return { online: false, toolCount: null };
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     sendToShell: (message) => {
       if (typeof process.send === "function" && process.connected) {
         try {
@@ -2076,12 +2090,16 @@ async function startServer() {
         : "";
       const settingsSnapshot = runtime.settings.get();
       const personaInstructions = personaBlock(settingsSnapshot.persona, settingsSnapshot.reality);
+      // Only the tools that can actually run right now (phone checked in, PC
+      // online, provider configured) are offered to the model.
+      const liveCapabilities = runtime.capabilityInstructions();
       const finalInstructions = [
         formatSystemInstructionsWithMemories(
           `${capabilityInstructions}\n\n${LIVE_AGENT_INSTRUCTIONS}\n\n${presenceInstructions}`,
           memories,
         ),
         personaInstructions,
+        liveCapabilities,
         ...(voiceStyle ? [voiceStyle] : []),
         "FINAL TURN DISCIPLINE: Contribute before you inquire. When the user makes an observation or expresses a feeling, answer with a concrete statement and normally zero questions. Never propose learning their routine, preferences, memories, or personal details as the solution to sounding human. Do not claim emotional connection. Let a complete statement end naturally. Never append a reflexive feedback check such as 'Kya bolte ho?', 'right?', 'hai na?', 'what do you think?', or 'kaisa laga?' to an already complete observation.",
       ].join("\n\n");

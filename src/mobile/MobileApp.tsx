@@ -8,7 +8,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
-  Activity, Brain, CalendarClock, Camera, History, Loader2, Menu, MessageCircleHeart, Mic, MicOff,
+  Activity, Brain, CalendarClock, Camera, History, Loader2, Menu, MessageCircleHeart, MessageSquare, Mic, MicOff,
   OctagonX, Phone, Send, Settings as SettingsIcon, ShieldQuestion, Square, Wifi, WifiOff, X,
 } from "lucide-react";
 import { useAppEvents } from "../lib/useAppEvents";
@@ -18,7 +18,7 @@ import { useMobileSession } from "./useMobileSession";
 import { useMobilePrefs, useKeyboardInset } from "./mobilePrefs";
 import { MobileStage, accentFor } from "./MobileStage";
 import { DevicePanel, HelpPanel, HistoryPanel, MemoryPanel, MissionsPanel, SettingsPanel, type MobileSheet } from "./MobilePanels";
-import { AutomationsPanel, BriefingPanel, CallsPanel, DiagnosticsPanel, PersonaPanel, StopPanel, VisionPanel } from "./MobileIntelPanels";
+import { AutomationsPanel, BriefingPanel, CallsPanel, DiagnosticsPanel, MessagesPanel, PersonaPanel, StopPanel, VisionPanel } from "./MobileIntelPanels";
 import { installNativeShell, setNativeBackHandler } from "./native";
 
 const THEME_STORAGE = "sara.mobile.theme.v1";
@@ -366,6 +366,7 @@ export function MobileApp() {
               ["automations", Activity, "Automations"],
               ["memory", Brain, "Memory"],
               ["calls", Phone, "Calls"],
+              ["messages", MessageSquare, "Messages"],
               ["vision", Camera, "Look at this"],
               ["persona", MessageCircleHeart, "How she talks"],
               ["device", Wifi, "Connection"],
@@ -423,6 +424,7 @@ export function MobileApp() {
       {sheet === "stop" && <StopPanel onClose={() => setSheet(null)} onStopped={setNotice} />}
       {sheet === "selfcheck" && <DiagnosticsPanel onClose={() => setSheet(null)} />}
       {sheet === "calls" && <CallsPanel onClose={() => setSheet(null)} />}
+      {sheet === "messages" && <MessagesPanel onClose={() => setSheet(null)} />}
     </div>
   );
 }

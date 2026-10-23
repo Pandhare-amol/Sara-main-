@@ -125,3 +125,68 @@ call and clears the queue.
 5. No messaging connectors (WhatsApp/Telegram/Discord/Slack) yet.
 6. No application-discovery or YouTube controller yet.
 7. The Android plugin was compiled in CI but **not** run on a physical phone here.
+
+---
+
+# Addendum — capability registry and messaging (same day)
+
+## FILES ADDED
+
+```
+capabilities/registry.ts              live capability catalogue + model instruction block
+capabilities/routes.ts                GET /api/capabilities, POST /api/capabilities/report
+communication/messaging/types.ts      provider interface + outcome vocabulary
+communication/messaging/whatsappCloud.ts   official Meta Graph API sender
+communication/messaging/hub.ts        approval, duplicate protection, inbox, classification
+communication/messaging/routes.ts     status/messages/summary/outbox/send + signed webhook
+shared/deviceAuth.ts                  one device guard, used by calls and capabilities
+src/mobile/MobileIntelPanels.tsx      Messages panel + capability list
+tests/capabilities.test.ts            8 tests
+tests/messaging.test.ts               15 tests
+docs/CAPABILITIES_AND_MESSAGING.md    operator documentation
+```
+
+## CAPABILITIES
+
+| Item | State | Evidence |
+| --- | --- | --- |
+| Live catalogue on the server | **PASS** | live `dist/server.cjs`: `available: ["memory","phone.calls"]` with every unconfigured area marked UNAVAILABLE |
+| Phone reports its own capabilities | **PASS** | `POST /api/capabilities/report` → 200, then `GET` shows the device and `phone.call.place = AVAILABLE`, `phone.call.speak_audio = NOT_SUPPORTED` |
+| Model only sees what is available | **PASS (code)** | the live instruction now appends `capabilitySummary(...)`; unit-tested to say "Available: none." when nothing is usable |
+| Token required for reports | **PASS** | 401 without the header (tested) |
+| Android side | **COMPILES** | the plugin posts a permission-accurate report on start |
+
+## MESSAGING
+
+| Item | State | Evidence |
+| --- | --- | --- |
+| WhatsApp Cloud API send | **PASS (stub-verified)** | success returns `SENT` + Meta message id; recipient normalised to `+919876543210` |
+| 2xx without an id | **PASS** | reported `UNCERTAIN`, never `SENT` |
+| Provider error mapping | **PASS** | `WHATSAPP_131030`, `retryable: false`, Meta's message kept |
+| Unconfigured provider | **PASS (live)** | `POST /api/messaging/send` → 409 `NOT_SUPPORTED` with the exact missing variables |
+| Approval before send | **PASS** | first call returns `REQUIRES_APPROVAL` + confirmation id, nothing is sent |
+| Duplicate protection | **PASS** | identical draft inside 90 s refused, provider called once |
+| Webhook signature | **PASS** | unsigned POST → 401, signed POST → message stored; no app secret → 503 |
+| Inbound classification | **PASS** | deterministic reasons stored with each message |
+| Desktop WhatsApp path | **UNCHANGED** | the existing agent path was not modified |
+
+## TESTS (this addendum)
+
+| Suite | Result |
+| --- | --- |
+| `npm run test:capabilities` | **PASS**, 23/23 (8 registry + 15 messaging) |
+| `npm run test:ui` | **PASS**, phone 50/50, desktop 6/6 |
+| `npm run test:agent` / `test:calls` | 46/0/1 · 30/30 |
+| `test:characters` / `test:remote-access` / `test:mobile` / `test:persona` | 8/1 · 13/13 · 6/6 · 33/33 |
+| lint · build:web · check:bundle-secrets | PASS · PASS · 12 files clean |
+
+## REMAINING LIMITATIONS (this addendum)
+
+1. WhatsApp sending needs a Meta Business account and a verified sender number;
+   without credentials the connector is honestly `NOT_SUPPORTED`.
+2. Inbound messages require a public HTTPS webhook URL and the app secret.
+3. No Telegram/Discord/Slack/email connectors yet — adding one means implementing
+   the same small provider interface, nothing else.
+4. The capability report from the phone covers calls only, because that is what
+   the Android plugin implements today.
+5. No physical-device run of the updated plugin; the APK build is the evidence.

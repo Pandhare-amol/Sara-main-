@@ -20,8 +20,14 @@ import { voicePrompt, type TaskEventKind } from "../agent/personality";
 import { InputArbiter, ResourceScheduler } from "../agent/scheduler";
 import { publicTaskView, TaskStore, TERMINAL_STATES } from "../agent/taskSession";
 import { UtilityScheduler, type UtilityFired } from "../companion/utilities";
+import { buildCapabilities, capabilitySummary, CapabilityRegistry } from "../capabilities/registry";
+import { registerCapabilityRoutes } from "../capabilities/routes";
 import { CallManager } from "../communication/callManager";
 import { registerCallRoutes } from "../communication/routes";
+import { MessagingHub } from "../communication/messaging/hub";
+import { registerMessagingRoutes } from "../communication/messaging/routes";
+import { readWhatsAppConfig, WhatsAppCloudProvider } from "../communication/messaging/whatsappCloud";
+import { createDeviceGuard, readDeviceToken } from "../shared/deviceAuth";
 import { ContactBook } from "../memory/contacts";
 import { WorkingMemory } from "../memory/workingMemory";
 import { ModelRegistry } from "../models/registry";
@@ -60,6 +66,8 @@ export interface RuntimeOptions {
   recall: (query: string, limit: number) => Promise<string[]>;
   /** Extra emergency-stop hooks (legacy tool executor, etc.). */
   onEmergencyStop?: (reason: string) => void;
+  /** Live probe of the Windows desktop agent, supplied by the server. */
+  agentHealth?: () => Promise<{ online: boolean; toolCount?: number | null }>;
   /** Ask the Electron main process to do something (notification, companion). */
   sendToShell?: (message: Record<string, unknown>) => void;
   legacySettings?: Record<string, unknown>;
@@ -83,6 +91,9 @@ export class MyraaRuntime {
   readonly downloads: DownloadManager;
   readonly contacts: ContactBook;
   readonly calls: CallManager;
+  readonly messaging: MessagingHub;
+  readonly capabilities = new CapabilityRegistry();
+  private readonly deviceToken: string | null = readDeviceToken();
   readonly working = new WorkingMemory();
   readonly audit: AuditLog;
   readonly executor: ActionExecutor;
@@ -135,6 +146,15 @@ export class MyraaRuntime {
       },
       notify: (payload) => this.notify(payload.title, payload.body),
     });
+
+    // Messaging providers: only official APIs. A provider that is not
+    // configured reports NOT_SUPPORTED instead of pretending to send.
+    this.messaging = new MessagingHub({
+      dataDir,
+      audit: this.audit,
+      confirmations: this.confirmations,
+      providers: [new WhatsAppCloudProvider(readWhatsAppConfig())],
+    });
     this.executor = new ActionExecutor({
       call: options.callAgent,
       perception: this.perception,
@@ -186,6 +206,7 @@ export class MyraaRuntime {
       this.downloads.initialize(),
       this.contacts.initialize(),
       this.calls.initialize(),
+      this.messaging.initialize(),
       this.poses.initialize(),
     ]);
     this.missedUtilities = await this.utilities.initialize();
@@ -399,6 +420,54 @@ export class MyraaRuntime {
     return count;
   }
 
+  /** Desktop agent health, cached for 5 s. Never throws. */
+  private healthCache: { at: number; value: { online: boolean; toolCount: number | null } } | null = null;
+  desktopHealthSnapshot(): { online: boolean; toolCount: number | null } {
+    const now = Date.now();
+    if (this.healthCache && now - this.healthCache.at < 5_000) return this.healthCache.value;
+    if (!this.healthCache) {
+      this.healthCache = { at: 0, value: { online: false, toolCount: null } };
+      void this.refreshDesktopHealth();
+    }
+    return this.healthCache.value;
+  }
+
+  private async refreshDesktopHealth(): Promise<void> {
+    const probe = this.options.agentHealth;
+    let value: { online: boolean; toolCount: number | null } = { online: false, toolCount: null };
+    if (probe) {
+      try {
+        const result = await probe();
+        value = { online: Boolean(result.online), toolCount: typeof result.toolCount === "number" ? result.toolCount : null };
+      } catch {
+        value = { online: false, toolCount: null };
+      }
+    }
+    this.healthCache = { at: Date.now(), value };
+  }
+
+  /** Capability catalogue for the UI and the model. */
+  capabilityCatalogue() {
+    return buildCapabilities({
+      desktop: this.desktopHealthSnapshot(),
+      devices: this.capabilities.list(),
+      server: {
+        hasGeminiKey: Boolean(this.options.getSecret("provider:gemini")),
+        visionEnabled: Boolean(this.options.getSecret("provider:gemini")),
+        callsEnabled: this.currentSettings.calls.enabled,
+        deviceTokenConfigured: Boolean(this.deviceToken),
+        messagingProviders: this.messaging.providerStatuses(),
+        memoryReady: true,
+        voiceAvailable: Boolean(this.options.getSecret("provider:gemini")),
+      },
+    });
+  }
+
+  /** Instruction fragment listing what is actually usable right now. */
+  capabilityInstructions(): string {
+    return capabilitySummary(this.capabilityCatalogue());
+  }
+
   // ---- Electron main-process messages ------------------------------------------------
 
   handleShellMessage(message: Record<string, unknown>): void {
@@ -501,11 +570,38 @@ export class MyraaRuntime {
       }
     };
 
+    const device = createDeviceGuard(this.deviceToken);
+
     registerCallRoutes(app, {
       calls: this.calls,
       settings: () => this.currentSettings,
       updateCallsSettings: (patch) => this.settings.update({ calls: patch }),
-      deviceToken: (process.env.SARA_CALL_DEVICE_TOKEN || "").trim() || null,
+      deviceToken: this.deviceToken,
+    });
+
+    registerMessagingRoutes(app, {
+      hub: this.messaging,
+      whatsapp: readWhatsAppConfig(),
+      appSecret: (process.env.WHATSAPP_APP_SECRET || "").trim() || null,
+    });
+
+    registerCapabilityRoutes(app, {
+      registry: this.capabilities,
+      device,
+      server: () => ({
+        // The probe result is cached for a few seconds: the capabilities
+        // endpoint is read by the UI and the prompt, not by the agent loop.
+        desktop: this.desktopHealthSnapshot(),
+        server: {
+          hasGeminiKey: Boolean(this.options.getSecret("provider:gemini")),
+          visionEnabled: Boolean(this.options.getSecret("provider:gemini")),
+          callsEnabled: this.currentSettings.calls.enabled,
+          deviceTokenConfigured: Boolean(this.deviceToken),
+          messagingProviders: this.messaging.providerStatuses(),
+          memoryReady: true,
+          voiceAvailable: Boolean(this.options.getSecret("provider:gemini")),
+        },
+      }),
     });
 
     app.use("/user-characters", express.static(this.characters.root, { fallthrough: true, index: false, dotfiles: "deny" }));

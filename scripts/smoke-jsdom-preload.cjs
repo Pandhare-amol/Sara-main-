@@ -67,6 +67,31 @@ g.fetch = dom.window.fetch = async (input) => {
       notes: ["Long-running background monitors are not implemented."],
     });
   }
+  if (url.includes("/api/capabilities")) {
+    return json({
+      capabilities: [
+        { id: "core.reasoning", label: "Gemini reasoning", area: "system", platform: "server", risk: "low", status: "AVAILABLE", permissions: [], detail: "Gemini is configured on the server.", verification: "answer returned" },
+        { id: "phone.call.place", label: "Phone Call Place", area: "phone", platform: "android", risk: "high", status: "NEEDS_PERMISSION", permissions: ["CALL_PHONE"], detail: "Reported by phone-1", verification: "device reports" },
+        { id: "messaging.whatsapp", label: "whatsapp messaging", area: "messaging", platform: "server", risk: "high", status: "UNAVAILABLE", permissions: [], detail: "WhatsApp Cloud API is not configured", verification: "provider id" },
+      ],
+      available: ["chat"],
+      summary: "CAPABILITIES RIGHT NOW",
+      devices: [{ deviceId: "phone-1", platform: "android", reportedAt: new Date().toISOString(), count: 3 }],
+    });
+  }
+  if (url.includes("/api/messaging/status")) {
+    return json({ providers: [{ id: "whatsapp", label: "WhatsApp (Cloud API)", status: { ok: true, detail: "Configured; sends verified by message id." } }], webhookConfigured: true });
+  }
+  if (url.includes("/api/messaging/messages") || url.includes("/api/messaging/summary")) {
+    return json({ messages: [{
+      id: "w1", provider: "whatsapp", conversationId: "9198", fromId: "9198", fromName: "Rahul",
+      text: "Can you send the proposal by Friday?", at: new Date().toISOString(), unread: true, importance: "high",
+      reason: "Mentions urgency or a deadline.",
+    }] });
+  }
+  if (url.includes("/api/messaging/send")) {
+    return json({ status: "REQUIRES_APPROVAL", verified: false, provider: "whatsapp", to: "9198", detail: "Sara prepared the message and is waiting for your approval.", preview: "hello" });
+  }
   if (url.includes("/api/calls/policy")) {
     return json({
       calls: {
