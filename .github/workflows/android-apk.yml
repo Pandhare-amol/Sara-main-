@@ -28,6 +28,9 @@ on:
     paths:
       - "src/**"
       - "android/**"
+      - "android-mobile/**"
+      - "mobile.html"
+      - "vite.mobile.config.ts"
       - "capacitor.config.ts"
       - "package.json"
       - "package-lock.json"
