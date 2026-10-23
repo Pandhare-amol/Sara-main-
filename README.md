@@ -59,35 +59,50 @@ included; use `dist:public`.
 
 ## Sara on your phone (web + Android)
 
-Sara has a phone interface that talks to the **same** backend, memory and tools:
+The phone is another client of the **same** backend, memory, tools and policy —
+not a second Sara. Every PC feature is reachable there or says why it is not
+([docs/MOBILE_PARITY.md](docs/MOBILE_PARITY.md)).
+
+### Install the Android APK (fastest way to try it)
+
+1. On the PC: `npm install` then **`npm run phone`**. It prints an access token
+   and one or more `http://192.168.x.x:3000` addresses.
+2. On the phone: open
+   **[the rolling test release](https://github.com/Pandhare-amol/Sara-main-/releases/tag/apk-latest)**
+   and install `sara-debug-<commit>.apk` (allow the unknown source).
+3. In the app's **Connection** screen paste the address and the token →
+   *Test connection* → *Save & connect*.
+4. If the PC has no Gemini key yet, Sara asks for it once (validated on the PC).
+
+Full walkthrough, what to check, and troubleshooting:
+**[docs/APK_TESTING.md](docs/APK_TESTING.md)**. The debug APK allows plain
+`http://` on your own network; release builds stay HTTPS-only.
+
+### Other ways to run the phone UI
 
 - **Mobile web app** — open the deployed site (or `http://localhost:3000` on a
-  narrow screen). It shows the avatar, one microphone button, a text composer
-  and a compact menu (conversation, missions, memory, connection, settings,
-  help).
-- **Android APK** — Capacitor 7 package of the same web build. It is compiled by
-  GitHub Actions, so no Android Studio is needed on your laptop. See
-  [docs/ANDROID.md](docs/ANDROID.md).
+  narrow screen, or append `?ui=mobile`).
+- **Build the APK yourself** — the same Capacitor project is compiled by GitHub
+  Actions (`.github/workflows/android-apk.yml`); no Android Studio needed.
 
-The phone reaches Sara over HTTPS. Local-only mode is unchanged and is still the
-default; to allow a phone, start the server like this:
+To expose the server yourself instead of `npm run phone`:
 
 ```bash
 export SARA_REMOTE_ACCESS=1
 export SARA_ACCESS_TOKEN="$(openssl rand -hex 32)"
 export SARA_ALLOWED_ORIGINS="https://your-web-app.vercel.app"
 npm run dev
-# expose http://localhost:3000 with cloudflared/nginx (HTTPS + WebSockets)
+# then expose http://localhost:3000 with cloudflared/nginx (HTTPS + WebSockets)
 ```
 
-Then, on the phone, enter that HTTPS address and the token in **Connect to Sara**.
+More: [docs/MOBILE.md](docs/MOBILE.md) · [docs/APK_TESTING.md](docs/APK_TESTING.md) ·
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) · [docs/MOBILE_TEST_REPORT.md](docs/MOBILE_TEST_REPORT.md).
 
-More: [docs/MOBILE.md](docs/MOBILE.md) · [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) ·
-[docs/MOBILE_TEST_REPORT.md](docs/MOBILE_TEST_REPORT.md).
-
-Phone limitations are stated in the app's Help screen: camera vision is not
-implemented, screen vision and character import stay on the desktop, and PC
-automation from a phone is opt-in (`SARA_REMOTE_ALLOW_DESKTOP=1`).
+Phone limitations are stated in the app itself: continuous screen streaming and
+the 3D Character Studio stay on the desktop, character import happens on the PC
+(the model then streams to the phone), and PC automation from a phone is opt-in
+(`SARA_REMOTE_ALLOW_DESKTOP=1`). One-shot **PC screen** capture and camera vision
+work from the phone.
 
 ## Project map
 
