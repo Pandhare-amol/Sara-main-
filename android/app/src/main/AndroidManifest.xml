@@ -47,6 +47,11 @@
     <!-- Voice conversation with Sara. Requested at runtime, only when the
          microphone button is pressed; the app works without it (text mode). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Call integration: state events, placing approved calls, answering where permitted. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <!-- Optional: only used by the "wake phrase in browser" setting where the

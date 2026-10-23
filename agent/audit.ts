@@ -19,7 +19,9 @@ export type AuditKind =
   | "permission"
   | "file"
   | "download"
-  | "system";
+  | "system"
+  | "call"
+  | "message";
 
 export interface AuditEntry {
   at: string;

@@ -136,6 +136,8 @@ key screen, which posts it once to the server and stores nothing locally).
 | Self-check | ✅ works | `GET /api/mobile/diagnostics` — live probes, `unknown` where unproven |
 | Personality / reality mode | ✅ works | Persona + Reality Mode below |
 | Emergency stop from the phone | ✅ works | `POST /api/mobile/stop` (arms first; also denies pending approvals) |
+| Call reporting / answering | ⚠️ partial, by platform | Android app reports call state and places approved calls; Sara cannot speak into a cellular call — see [COMMUNICATION.md](./COMMUNICATION.md) |
+| Call policy, messages, summaries | ✅ works | `Settings → Calls`, `Calls → Policy` on the phone; summaries use only reported material |
 
 ## Personality and Reality Mode
 

@@ -18,7 +18,8 @@ export type Capability =
   | "NETWORK_API"
   | "PURCHASE"
   | "ACCOUNT_CHANGE"
-  | "POWER_CONTROL";
+  | "POWER_CONTROL"
+  | "PHONE_CALL";
 
 export type Decision = "allow" | "ask" | "deny";
 
@@ -102,6 +103,7 @@ export const CAPABILITY_INFO: Record<Capability, { label: string; description: s
   PURCHASE: { label: "Purchases", description: "Anything that spends money.", risk: "high" },
   ACCOUNT_CHANGE: { label: "Account changes", description: "Change passwords, profiles or account security.", risk: "high" },
   POWER_CONTROL: { label: "Power", description: "Shut down, restart, sleep or lock the PC.", risk: "high" },
+  PHONE_CALL: { label: "Phone calls", description: "Answer calls for you or place a call you approved.", risk: "high" },
 };
 
 /** Capabilities whose decision can never be relaxed to "allow". */

@@ -10,7 +10,15 @@ import {
   Bell, Camera, CheckCircle2, CircleAlert, CircleDot, Clock, Loader2, OctagonX, RefreshCw,
   ShieldCheck, Sparkles, TriangleAlert, XCircle,
 } from "lucide-react";
-import { api, type AppSettings, type DiagnosticState, type MobileAutomations, type MobileBriefing, type MobileDiagnostics, type PersonaSettings, type RealitySettings } from "../lib/appApi";
+import {
+  api, type AppSettings, type CallRecordView, type CallSettingsView, type DiagnosticState,
+  type MobileAutomations, type MobileBriefing, type MobileDiagnostics, type PersonaSettings, type RealitySettings,
+} from "../lib/appApi";
+import { getServerConfig } from "../lib/serverConfig";
+import {
+  bridgeAvailable, getCallBridgeStatus, readCallDevice, saveCallDevice, startCallBridge, stopCallBridge,
+  type CallBridgeStatus,
+} from "./callBridge";
 import { formatBytes, prepareImage, type PreparedImage } from "./image";
 import { Sheet } from "./MobilePanels";
 
@@ -682,6 +690,269 @@ export function StopPanel({ onClose, onStopped }: { onClose: () => void; onStopp
         <div className="flex items-center gap-1.5 pt-1 text-[10px] text-white/25">
           <ShieldCheck size={11} /> Uses the same emergency stop as the desktop shortcut.
         </div>
+      </div>
+    </Sheet>
+  );
+}
+
+/* -------------------------------------------------------------------- calls */
+
+const CALL_TONE: Record<string, string> = {
+  RINGING: "text-amber-200/90",
+  CONNECTED: "text-emerald-200/90",
+  ACTIVE: "text-emerald-200/90",
+  HELD: "text-cyan-200/80",
+  ENDED: "text-white/40",
+  MISSED: "text-rose-200/80",
+  REJECTED: "text-rose-200/70",
+  FAILED: "text-rose-200/80",
+  UNKNOWN: "text-white/40",
+};
+
+function callerLabel(call: CallRecordView): string {
+  return call.peer.name || call.peer.number || "Unknown number";
+}
+
+export function CallsPanel({ onClose }: { onClose: () => void }) {
+  const [state, setState] = useState<{ active: CallRecordView[]; recent: CallRecordView[] } | null>(null);
+  const [policy, setPolicy] = useState<CallSettingsView | null>(null);
+  const [tokenConfigured, setTokenConfigured] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [messageFor, setMessageFor] = useState<string | null>(null);
+  const [messageText, setMessageText] = useState("");
+  const [bridge, setBridge] = useState<CallBridgeStatus | null>(null);
+  const [deviceToken, setDeviceToken] = useState(readCallDevice().token);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const [list, settings] = await Promise.all([api.calls(), api.callPolicy()]);
+      setState(list);
+      setPolicy(settings.calls);
+      setTokenConfigured(settings.deviceTokenConfigured);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const act = async (work: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const savePolicy = (patch: Partial<CallSettingsView>) =>
+    void act(async () => {
+      const next = await api.updateCallPolicy(patch);
+      setPolicy(next.calls);
+    });
+
+  const all = [...(state?.active ?? []), ...(state?.recent ?? []).filter((call) => !state?.active.some((a) => a.id === call.id))];
+
+  return (
+    <Sheet title="Calls" subtitle="Sara only answers when your policy allows it. Unknown numbers are never answered automatically." onClose={onClose}>
+      <div className="space-y-4">
+        {error && <Card tone="warn"><p className="text-[11px] leading-relaxed text-amber-100/85">{error}</p></Card>}
+
+        {(state?.active ?? []).length > 0 && (
+          <div>
+            <SectionTitle>Live</SectionTitle>
+            <div className="space-y-2">
+              {state!.active.map((call) => (
+                <div key={call.id}>
+                  <Card tone={call.state === "RINGING" ? "warn" : "ok"}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-medium text-white/90">{callerLabel(call)}</p>
+                        <p className={`mt-0.5 font-mono text-[9px] uppercase tracking-wider ${CALL_TONE[call.state] ?? "text-white/40"}`}>
+                          {call.state.toLowerCase()} · {call.peer.relationship}
+                        </p>
+                        {call.decision && <p className="mt-1 text-[11px] leading-relaxed text-white/45">{call.decision.reason}</p>}
+                      </div>
+                      <span className="shrink-0 font-mono text-[9px] text-white/25">{new Date(call.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      {call.state === "RINGING" ? (
+                        <>
+                          <button type="button" disabled={busy} onClick={() => void act(() => api.answerCall(call.id))}
+                            className="flex-1 rounded-lg bg-emerald-500/20 py-1.5 text-[11px] text-emerald-100 ring-1 ring-emerald-400/30 disabled:opacity-40">
+                            Answer
+                          </button>
+                          <button type="button" disabled={busy} onClick={() => void act(() => api.rejectCall(call.id))}
+                            className="flex-1 rounded-lg bg-rose-500/15 py-1.5 text-[11px] text-rose-100 ring-1 ring-rose-400/30 disabled:opacity-40">
+                            Decline
+                          </button>
+                        </>
+                      ) : (
+                        <button type="button" disabled={busy} onClick={() => void act(() => api.endCall(call.id))}
+                          className="flex-1 rounded-lg bg-rose-500/15 py-1.5 text-[11px] text-rose-100 ring-1 ring-rose-400/30 disabled:opacity-40">
+                          End call
+                        </button>
+                      )}
+                      <button type="button" onClick={() => { setMessageFor(call.id); setMessageText(""); }}
+                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-white/70">
+                        Take message
+                      </button>
+                    </div>
+                    {messageFor === call.id && (
+                      <div className="mt-2 flex gap-2">
+                        <input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="What did they say?"
+                          aria-label="Call message"
+                          className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white outline-none placeholder:text-white/25" />
+                        <button type="button" disabled={!messageText.trim()}
+                          onClick={() => void act(async () => { await api.saveCallMessage(call.id, messageText.trim()); setMessageFor(null); })}
+                          className="rounded-lg bg-white/10 px-3 py-1.5 text-[11px] text-white/80 disabled:opacity-30">
+                          Save
+                        </button>
+                      </div>
+                    )}
+                  </Card>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <SectionTitle>Policy</SectionTitle>
+          {!policy ? (
+            <div className="flex justify-center py-6"><Loader2 size={16} className="animate-spin text-white/30" /></div>
+          ) : (
+            <div className="space-y-2">
+              <button type="button" disabled={busy} onClick={() => savePolicy({ enabled: !policy.enabled })}
+                className="flex w-full items-center justify-between rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2.5 text-left">
+                <span>
+                  <span className="block text-xs text-white/80">Phone integration</span>
+                  <span className="mt-0.5 block text-[11px] text-white/35">
+                    {policy.enabled ? "Sara receives call events from your phone." : "Off — no call events are accepted."}
+                  </span>
+                </span>
+                <span className={`h-5 w-9 shrink-0 rounded-full p-0.5 transition ${policy.enabled ? "bg-cyan-400/70" : "bg-white/10"}`}>
+                  <span className={`block h-4 w-4 rounded-full bg-white transition-transform ${policy.enabled ? "translate-x-4" : ""}`} />
+                </span>
+              </button>
+
+              {([
+                ["answerFamily", "Family"],
+                ["answerBusinessContacts", "Business contacts"],
+                ["answerKnownContacts", "Other known contacts"],
+              ] as Array<[keyof CallSettingsView, string]>).map(([key, label]) => (
+                <div key={key} className="flex items-center justify-between rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2">
+                  <span className="text-[11px] text-white/70">{label}</span>
+                  <div className="flex overflow-hidden rounded-lg border border-white/10">
+                    {(["never", "ask", "auto"] as const).map((mode) => (
+                      <button key={mode} type="button" disabled={busy} onClick={() => savePolicy({ [key]: mode } as Partial<CallSettingsView>)}
+                        aria-pressed={policy[key] === mode}
+                        className={`px-2 py-1 text-[10px] uppercase tracking-wider ${policy[key] === mode ? "bg-cyan-400/20 text-cyan-100" : "text-white/40"}`}>
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              <button type="button" disabled={busy} onClick={() => savePolicy({ answerUnknownCall: !policy.answerUnknownCall })}
+                className="flex w-full items-center justify-between rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2.5 text-left">
+                <span>
+                  <span className="block text-xs text-white/80">Ask me about unknown callers</span>
+                  <span className="mt-0.5 block text-[11px] leading-relaxed text-white/35">
+                    Sara still never answers an unknown number on her own — she can only ask you.
+                  </span>
+                </span>
+                <span className={`h-5 w-9 shrink-0 rounded-full p-0.5 ${policy.answerUnknownCall ? "bg-cyan-400/70" : "bg-white/10"}`}>
+                  <span className={`block h-4 w-4 rounded-full bg-white transition-transform ${policy.answerUnknownCall ? "translate-x-4" : ""}`} />
+                </span>
+              </button>
+
+              <button type="button" disabled={busy} onClick={() => savePolicy({ screenCalls: !policy.screenCalls })}
+                className="flex w-full items-center justify-between rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2.5 text-left">
+                <span>
+                  <span className="block text-xs text-white/80">Screen calls before connecting</span>
+                  <span className="mt-0.5 block text-[11px] leading-relaxed text-white/35">Sara answers, asks who is calling and why.</span>
+                </span>
+                <span className={`h-5 w-9 shrink-0 rounded-full p-0.5 ${policy.screenCalls ? "bg-cyan-400/70" : "bg-white/10"}`}>
+                  <span className={`block h-4 w-4 rounded-full bg-white transition-transform ${policy.screenCalls ? "translate-x-4" : ""}`} />
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <SectionTitle>This phone</SectionTitle>
+          <Card>
+            {bridgeAvailable() ? (
+              <div className="space-y-2">
+                <p className="text-[11px] leading-relaxed text-white/55">
+                  {bridge?.listening
+                    ? `Reporting call state as ${bridge.deviceId ?? "this device"}.`
+                    : bridge?.error || "Call reporting is not running."}
+                </p>
+                <input value={deviceToken} onChange={(event) => setDeviceToken(event.target.value)}
+                  placeholder="Device token" aria-label="Device token"
+                  className="w-full rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white outline-none placeholder:text-white/25" />
+                <div className="flex gap-2">
+                  <button type="button"
+                    onClick={() => void act(async () => {
+                      saveCallDevice({ token: deviceToken });
+                      const base = getServerConfig().apiBase || window.location.origin;
+                      setBridge(await startCallBridge(base));
+                    })}
+                    className="flex-1 rounded-lg bg-white/10 py-1.5 text-[11px] text-white/80">
+                    Save &amp; start
+                  </button>
+                  <button type="button"
+                    onClick={() => void act(async () => { await stopCallBridge(); setBridge(await getCallBridgeStatus()); })}
+                    className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-white/60">
+                    Stop
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-[11px] leading-relaxed text-white/45">
+                Call state comes from the Android app. A browser cannot read your phone's calls, so nothing is reported here.
+                {!tokenConfigured && " The server also has no SARA_CALL_DEVICE_TOKEN set."}
+              </p>
+            )}
+          </Card>
+        </div>
+
+        <div>
+          <SectionTitle>Recent</SectionTitle>
+          {all.length === 0 ? (
+            <p className="text-[11px] leading-relaxed text-white/35">No calls recorded yet.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {all.filter((call) => ["ENDED", "MISSED", "REJECTED", "FAILED"].includes(call.state)).slice(0, 10).map((call) => (
+                <div key={call.id} className="flex items-center gap-2 border-b border-white/5 py-1.5 last:border-0">
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${call.state === "MISSED" ? "bg-rose-400/70" : call.state === "ENDED" ? "bg-emerald-400/50" : "bg-white/20"}`} />
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-white/70">{callerLabel(call)}</span>
+                  <span className="shrink-0 font-mono text-[9px] uppercase tracking-wider text-white/30">{call.state.toLowerCase()}</span>
+                  <span className="shrink-0 font-mono text-[9px] text-white/25">
+                    {new Date(call.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <p className="pb-1 text-[10px] leading-relaxed text-white/25">
+          Android does not let a normal app speak into a cellular call, so Sara cannot hold a conversation on a GSM call.
+          Answering and hanging up need the system dialer role; when it is unavailable the app reports that instead of pretending.
+        </p>
       </div>
     </Sheet>
   );

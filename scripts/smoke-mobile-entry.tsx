@@ -53,7 +53,7 @@ async function run() {
   }
 
   // Menu-driven panels.
-  for (const panelTitle of ["Today", "Automations", "Look at this", "How she talks", "Memory", "Connection", "Settings", "Self-check", "Help & diagnostics"]) {
+  for (const panelTitle of ["Today", "Calls", "Automations", "Look at this", "How she talks", "Memory", "Connection", "Settings", "Self-check", "Help & diagnostics"]) {
     clickByLabel("Open menu");
     await sleep(150);
     check(`menu item "${panelTitle}" present`, clickByText(panelTitle));
@@ -95,6 +95,19 @@ async function run() {
   const personaText = document.body.textContent || "";
   check("persona panel lists profiles", personaText.includes("Companion") && personaText.includes("Executive"));
   check("persona panel lists reality modes", personaText.includes("Strict"));
+  clickByLabel("Close");
+  await sleep(200);
+
+  // Calls: the live call is shown with its policy reason and the two actions.
+  clickByLabel("Open menu");
+  await sleep(150);
+  clickByText("Calls");
+  await sleep(500);
+  const callText = document.body.textContent || "";
+  check("calls panel shows the ringing caller", callText.includes("Rahul"));
+  check("calls panel explains the policy", callText.includes("policy says ask"));
+  check("calls panel offers answer and decline", callText.includes("Answer") && callText.includes("Decline"));
+  check("calls panel refuses to fake unknown-caller answering", callText.includes("never answers an unknown number"));
   clickByLabel("Close");
   await sleep(200);
 

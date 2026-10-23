@@ -18,6 +18,7 @@ g.fetch = g.window.fetch = async (input) => {
       privacy: { screenAwareness: false, cameraPresence: false, clipboardInContext: false },
       performance: { activeFps: 60, idleFps: 30, sleepFps: 15, perceptionPollSec: 5 },
       developer: { debugView: false, physicsDebug: false, verboseLogs: false },
+      calls: { enabled: false, answerKnownContacts: "ask", answerFamily: "ask", answerBusinessContacts: "ask", answerUnknownCall: false, answerDuringMeetings: false, answerDuringFocus: false, screenCalls: true, takeMessage: true, notifyOnMissed: true, maxCallMinutes: 20 },
       persona: { profile: "companion", context: "both", warmth: 78, humor: 55, formality: 30, directness: 55, empathy: 75, energy: 60, curiosity: 65 },
       reality: { mode: "standard", challengeAssumptions: true },
     });

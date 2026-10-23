@@ -106,6 +106,8 @@ automation from a phone is opt-in (`SARA_REMOTE_ALLOW_DESKTOP=1`).
 | `src/mobile/`, `server_remoteAccess.ts` | Phone shell and the opt-in remote-access layer |
 | `server_persona.ts`, `settings/appSettings.ts` | Personality profiles/dials and Reality Mode (fact vs assumption labelling) |
 | `server_mobileApi.ts` | `/api/mobile/*` composition layer: briefing, diagnostics, automations, vision, stop |
+| `communication/` | Call manager, answering policy, caller identity and the authenticated device bridge |
+| `android/.../SaraCallsPlugin.java` | Android call-state events and approved call actions |
 | `android/`, `capacitor.config.ts` | Capacitor Android project (built in CI) |
 | `scripts/android-assets.sh` | Regenerates launcher icons and splash screens |
 | `public/`, `vercel.json`, `netlify.toml` | PWA assets and static deployment config |

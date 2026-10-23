@@ -67,6 +67,27 @@ g.fetch = dom.window.fetch = async (input) => {
       notes: ["Long-running background monitors are not implemented."],
     });
   }
+  if (url.includes("/api/calls/policy")) {
+    return json({
+      calls: {
+        enabled: true, answerKnownContacts: "ask", answerFamily: "ask", answerBusinessContacts: "ask",
+        answerUnknownCall: false, answerDuringMeetings: false, answerDuringFocus: false,
+        screenCalls: true, takeMessage: true, notifyOnMissed: true, maxCallMinutes: 20,
+      },
+      deviceTokenConfigured: false,
+    });
+  }
+  if (url.includes("/api/calls")) {
+    return json({
+      active: [{
+        id: "call-1", deviceCallId: "d1", deviceId: "phone-1", direction: "incoming",
+        peer: { number: "9876543210", name: "Rahul", contactId: "c1", relationship: "business", organization: "Acme", priority: "high", unknown: false },
+        state: "RINGING", decision: { action: "ask_user", reason: "Your policy says ask before answering.", requiresUser: true },
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), answeredAt: null, endedAt: null, durationSec: null, transcript: [],
+      }],
+      recent: [],
+    });
+  }
   if (url.includes("/api/app-settings")) return json(stubSettings);
   if (url.includes("/api/memories")) return json([]);
   if (url.includes("/api/tasks")) return json([]);

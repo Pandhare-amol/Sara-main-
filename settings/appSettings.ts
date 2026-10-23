@@ -109,6 +109,22 @@ export interface AppSettings {
    * live system instruction (server_persona.ts), so a change is audible from
    * the next turn. They shape delivery, never facts.
    */
+  calls: {
+    /** Accept call events from an authorised phone at all. */
+    enabled: boolean;
+    answerKnownContacts: "never" | "ask" | "auto";
+    answerFamily: "never" | "ask" | "auto";
+    answerBusinessContacts: "never" | "ask" | "auto";
+    /** When true SARA asks you about unknown callers. It never auto-answers them. */
+    answerUnknownCall: boolean;
+    answerDuringMeetings: boolean;
+    answerDuringFocus: boolean;
+    /** SARA answers with a short screening script instead of a full conversation. */
+    screenCalls: boolean;
+    takeMessage: boolean;
+    notifyOnMissed: boolean;
+    maxCallMinutes: number;
+  };
   persona: {
     profile: PersonaProfileId;
     /** Which half of your life she treats as the default context. */
@@ -213,6 +229,19 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     physicsDebug: false,
     verboseLogs: false,
   },
+  calls: {
+    enabled: false,
+    answerKnownContacts: "ask",
+    answerFamily: "ask",
+    answerBusinessContacts: "ask",
+    answerUnknownCall: false,
+    answerDuringMeetings: false,
+    answerDuringFocus: false,
+    screenCalls: true,
+    takeMessage: true,
+    notifyOnMissed: true,
+    maxCallMinutes: 20,
+  },
   persona: {
     profile: "companion",
     context: "both",
@@ -243,7 +272,7 @@ const bool = (value: unknown, fallback: boolean) => (typeof value === "boolean" 
 export function normalizeSettings(input: unknown, base: AppSettings = DEFAULT_APP_SETTINGS): AppSettings {
   const raw = (input && typeof input === "object" ? input : {}) as Record<string, any>;
   const d = base;
-  const b = raw.behavior || {}, a = raw.autonomy || {}, v = raw.voice || {}, c = raw.companion || {}, ch = raw.character || {}, p = raw.physics || {}, pr = raw.privacy || {}, pe = raw.performance || {}, dev = raw.developer || {}, gr = raw.graphics || {}, per = raw.persona || {}, rea = raw.reality || {};
+  const b = raw.behavior || {}, a = raw.autonomy || {}, v = raw.voice || {}, c = raw.companion || {}, ch = raw.character || {}, p = raw.physics || {}, pr = raw.privacy || {}, pe = raw.performance || {}, dev = raw.developer || {}, gr = raw.graphics || {}, per = raw.persona || {}, rea = raw.reality || {}, cal = raw.calls || {};
   return {
     version: 3,
     onboardingComplete: bool(raw.onboardingComplete, d.onboardingComplete),
@@ -331,6 +360,19 @@ export function normalizeSettings(input: unknown, base: AppSettings = DEFAULT_AP
       debugView: bool(dev.debugView, d.developer.debugView),
       physicsDebug: bool(dev.physicsDebug, d.developer.physicsDebug),
       verboseLogs: bool(dev.verboseLogs, d.developer.verboseLogs),
+    },
+    calls: {
+      enabled: bool(cal.enabled, d.calls.enabled),
+      answerKnownContacts: oneOf(cal.answerKnownContacts, ["never", "ask", "auto"] as const, d.calls.answerKnownContacts),
+      answerFamily: oneOf(cal.answerFamily, ["never", "ask", "auto"] as const, d.calls.answerFamily),
+      answerBusinessContacts: oneOf(cal.answerBusinessContacts, ["never", "ask", "auto"] as const, d.calls.answerBusinessContacts),
+      answerUnknownCall: bool(cal.answerUnknownCall, d.calls.answerUnknownCall),
+      answerDuringMeetings: bool(cal.answerDuringMeetings, d.calls.answerDuringMeetings),
+      answerDuringFocus: bool(cal.answerDuringFocus, d.calls.answerDuringFocus),
+      screenCalls: bool(cal.screenCalls, d.calls.screenCalls),
+      takeMessage: bool(cal.takeMessage, d.calls.takeMessage),
+      notifyOnMissed: bool(cal.notifyOnMissed, d.calls.notifyOnMissed),
+      maxCallMinutes: clamp(cal.maxCallMinutes, 1, 120, d.calls.maxCallMinutes),
     },
     persona: {
       profile: oneOf(per.profile, ["companion", "professional", "executive", "mentor", "friend", "emergency"] as const, d.persona.profile),

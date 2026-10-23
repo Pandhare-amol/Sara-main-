@@ -20,6 +20,8 @@ import { voicePrompt, type TaskEventKind } from "../agent/personality";
 import { InputArbiter, ResourceScheduler } from "../agent/scheduler";
 import { publicTaskView, TaskStore, TERMINAL_STATES } from "../agent/taskSession";
 import { UtilityScheduler, type UtilityFired } from "../companion/utilities";
+import { CallManager } from "../communication/callManager";
+import { registerCallRoutes } from "../communication/routes";
 import { ContactBook } from "../memory/contacts";
 import { WorkingMemory } from "../memory/workingMemory";
 import { ModelRegistry } from "../models/registry";
@@ -80,6 +82,7 @@ export class MyraaRuntime {
   readonly perception: PerceptionEngine;
   readonly downloads: DownloadManager;
   readonly contacts: ContactBook;
+  readonly calls: CallManager;
   readonly working = new WorkingMemory();
   readonly audit: AuditLog;
   readonly executor: ActionExecutor;
@@ -115,6 +118,23 @@ export class MyraaRuntime {
     });
     this.contacts = new ContactBook(dataDir);
     this.audit = new AuditLog(dataDir);
+    // Phone events arrive from an authorised device; the manager owns call
+    // state, the answering policy and the command queue for that device.
+    this.calls = new CallManager({
+      dataDir,
+      contacts: this.contacts,
+      audit: this.audit,
+      confirmations: this.confirmations,
+      settings: () => this.currentSettings,
+      presence: () => {
+        // Reuse the existing presence engine instead of inventing a second one:
+        // DND reports why it engaged ("meeting", "fullscreen", "manual"…).
+        const dnd = this.conversation.dnd;
+        const inMeeting = /meeting|call/i.test(dnd.auto || "");
+        return { inMeeting, focusMode: dnd.active && !inMeeting };
+      },
+      notify: (payload) => this.notify(payload.title, payload.body),
+    });
     this.executor = new ActionExecutor({
       call: options.callAgent,
       perception: this.perception,
@@ -165,6 +185,7 @@ export class MyraaRuntime {
       this.tasks.initialize(),
       this.downloads.initialize(),
       this.contacts.initialize(),
+      this.calls.initialize(),
       this.poses.initialize(),
     ]);
     this.missedUtilities = await this.utilities.initialize();
@@ -372,6 +393,8 @@ export class MyraaRuntime {
   emergencyStop(reason: string): number {
     const count = this.manager.stopAll(reason);
     rootScope.cancelChildren(reason);
+    // Live calls and queued phone commands must not outlive a stop.
+    void this.calls.stop(reason).catch(() => {});
     this.audit.record(null, "system", `Emergency stop (${reason})`);
     return count;
   }
@@ -477,6 +500,13 @@ export class MyraaRuntime {
         if (!res.headersSent) res.status(status).json({ error: error instanceof ModelError ? error.userMessage : error instanceof Error ? error.message : String(error) });
       }
     };
+
+    registerCallRoutes(app, {
+      calls: this.calls,
+      settings: () => this.currentSettings,
+      updateCallsSettings: (patch) => this.settings.update({ calls: patch }),
+      deviceToken: (process.env.SARA_CALL_DEVICE_TOKEN || "").trim() || null,
+    });
 
     app.use("/user-characters", express.static(this.characters.root, { fallthrough: true, index: false, dotfiles: "deny" }));
 

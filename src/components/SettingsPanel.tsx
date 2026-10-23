@@ -13,13 +13,13 @@ import React, { useEffect, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Settings, X, Power, Mic, Cpu, Info, Check, AlertTriangle, Sparkles, KeyRound, Loader2, Brain, ShieldCheck,
-  Bell, Eye, MonitorSmartphone, Lock, Wrench, MessageCircleHeart, Scale,
+  Bell, Eye, MonitorSmartphone, Lock, Wrench, MessageCircleHeart, Scale, Phone,
 } from "lucide-react";
 import type { MyraaSettings } from "../lib/settingsStore";
 import { api, LOCKED_CAPABILITIES, type AppSettings, type AppSettingsPatch, type Decision, type ModelCatalogue, type PermissionsView, type MessageConfirmationMode, type PersonaSettings, type RealitySettings } from "../lib/appApi";
 import { ModelSelectorPanel } from "./ModelSelector";
 
-export type SettingsSection = "general" | "ai" | "voice" | "persona" | "reality" | "agent" | "privacy" | "presence" | "character" | "system" | "about";
+export type SettingsSection = "general" | "ai" | "voice" | "persona" | "reality" | "calls" | "agent" | "privacy" | "presence" | "character" | "system" | "about";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -42,6 +42,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Power }[] = [
   { id: "voice", label: "Voice", icon: Mic },
   { id: "persona", label: "Personality", icon: MessageCircleHeart },
   { id: "reality", label: "Reality mode", icon: Scale },
+  { id: "calls", label: "Calls", icon: Phone },
   { id: "agent", label: "PC control & safety", icon: ShieldCheck },
   { id: "privacy", label: "Privacy", icon: Lock },
   { id: "presence", label: "Presence", icon: Bell },
@@ -303,7 +304,7 @@ export function PermissionRows({ view, capabilities, onSet }: { view: Permission
   );
 }
 
-const ACTION_CAPABILITIES = ["LAUNCH_APP", "BROWSE_WEB", "CONTROL_INPUT", "READ_FILE", "WRITE_FILE", "DELETE_FILE", "DOWNLOAD_FILE", "EXECUTE_DOWNLOAD", "RUN_COMMAND", "INSTALL_SOFTWARE", "MODIFY_SYSTEM_SETTINGS", "SEND_MESSAGE", "NETWORK_API", "PURCHASE", "ACCOUNT_CHANGE", "POWER_CONTROL"];
+const ACTION_CAPABILITIES = ["LAUNCH_APP", "BROWSE_WEB", "CONTROL_INPUT", "READ_FILE", "WRITE_FILE", "DELETE_FILE", "DOWNLOAD_FILE", "EXECUTE_DOWNLOAD", "RUN_COMMAND", "INSTALL_SOFTWARE", "MODIFY_SYSTEM_SETTINGS", "SEND_MESSAGE", "NETWORK_API", "PURCHASE", "ACCOUNT_CHANGE", "POWER_CONTROL", "PHONE_CALL"];
 const PRIVACY_CAPABILITIES = ["SCREEN_CAPTURE", "CLIPBOARD", "ACCESS_MICROPHONE", "ACCESS_CAMERA"];
 
 const MESSAGE_MODES: [MessageConfirmationMode, string][] = [
@@ -474,6 +475,46 @@ function PersonaSection({ app, patch }: { app: AppSettings; patch: (p: AppSettin
         Mood is <b>inferred from your words</b>, and inference can be wrong — she is told to say so instead of assuming.
         Automatic switching between profiles (for example to Emergency when you sound stressed) is <b>not implemented</b>;
         she uses the profile you set here. That is deliberate: an inferred mood is not a good enough reason to change her whole manner.
+      </Note>
+    </div>
+  );
+}
+
+const ANSWER_MODES: Array<["never" | "ask" | "auto", string]> = [["never", "Never"], ["ask", "Ask me"], ["auto", "Answer"]];
+
+function CallsSection({ app, patch }: { app: AppSettings; patch: (p: AppSettingsPatch) => void }) {
+  const calls = app.calls;
+  return (
+    <div className="space-y-5">
+      <Group title="Phone integration" hint="Call state comes from the Sara Android app. A Windows process cannot read a cellular call, and Android does not let an ordinary app speak into one.">
+        <ToggleRow label="Accept call events from my phone"
+          description="Off by default. The phone must also send the device token configured on the server."
+          checked={calls.enabled} onChange={(v) => patch({ calls: { enabled: v } })} />
+        <Row label="Screening" description="When Sara may answer, she asks who is calling and why before connecting you.">
+          <Choice label="Call screening" value={calls.screenCalls ? "on" : "off"}
+            options={[["on", "On"], ["off", "Off"]]} onChange={(v) => patch({ calls: { screenCalls: v === "on" } })} />
+        </Row>
+        <ToggleRow label="Take messages" description="Store what the caller said and notify you." checked={calls.takeMessage} onChange={(v) => patch({ calls: { takeMessage: v } })} />
+        <ToggleRow label="Tell me about missed calls" checked={calls.notifyOnMissed} onChange={(v) => patch({ calls: { notifyOnMissed: v } })} />
+        <SliderRow label="Longest call Sara may hold" description="After this she ends the call and summarises it." value={calls.maxCallMinutes} min={1} max={60} unit=" min" onChange={(v) => patch({ calls: { maxCallMinutes: v } })} />
+      </Group>
+
+      <Group title="Who may Sara answer?" hint="“Answer” means Sara answers and screens. Unknown numbers are never answered automatically, whatever this says.">
+        <Row label="Family"><Choice label="Family" value={calls.answerFamily} options={ANSWER_MODES} onChange={(v) => patch({ calls: { answerFamily: v } })} /></Row>
+        <Row label="Business contacts"><Choice label="Business contacts" value={calls.answerBusinessContacts} options={ANSWER_MODES} onChange={(v) => patch({ calls: { answerBusinessContacts: v } })} /></Row>
+        <Row label="Other known contacts"><Choice label="Other known contacts" value={calls.answerKnownContacts} options={ANSWER_MODES} onChange={(v) => patch({ calls: { answerKnownContacts: v } })} /></Row>
+        <ToggleRow label="Ask me about unknown callers" description="Sara asks whether to answer. She never answers an unknown number on her own." checked={calls.answerUnknownCall} onChange={(v) => patch({ calls: { answerUnknownCall: v } })} />
+      </Group>
+
+      <Group title="Quiet moments">
+        <ToggleRow label="Answer during meetings" checked={calls.answerDuringMeetings} onChange={(v) => patch({ calls: { answerDuringMeetings: v } })} />
+        <ToggleRow label="Answer in focus mode" checked={calls.answerDuringFocus} onChange={(v) => patch({ calls: { answerDuringFocus: v } })} />
+      </Group>
+
+      <Note tone="warn">
+        Sara cannot talk into a normal cellular call: Android keeps in-call audio for the system dialer. Answering and hanging up also need the
+        system dialer role; without it the phone reports “not permitted” instead of pretending it worked. Everything else here — identification,
+        the policy, taking messages and summaries — runs on the server and is real.
       </Note>
     </div>
   );
@@ -732,6 +773,7 @@ export function SettingsPanel({ isOpen, onClose, settings, onChange, appSettings
 
                 {section === "persona" && app && <PersonaSection app={app} patch={patch} />}
                 {section === "reality" && app && <RealitySection app={app} patch={patch} />}
+                {section === "calls" && app && <CallsSection app={app} patch={patch} />}
                 {section === "system" && app && <SystemSection app={app} patch={patch} onRestartOnboarding={onRestartOnboarding} />}
 
                 {section === "about" && (

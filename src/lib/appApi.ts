@@ -162,6 +162,7 @@ export interface AppSettings {
   developer: { debugView: boolean; physicsDebug: boolean; verboseLogs: boolean };
   persona: PersonaSettings;
   reality: RealitySettings;
+  calls: CallSettingsView;
 }
 
 export type PersonaProfileId = "companion" | "professional" | "executive" | "mentor" | "friend" | "emergency";
@@ -181,6 +182,82 @@ export interface PersonaSettings {
 export interface RealitySettings {
   mode: "off" | "standard" | "strict";
   challengeAssumptions: boolean;
+}
+
+// ---- calls (communication/) -------------------------------------------------------------
+
+export type CallState = "RINGING" | "CONNECTED" | "ACTIVE" | "HELD" | "ENDED" | "MISSED" | "REJECTED" | "FAILED" | "UNKNOWN";
+
+export interface CallPeerView {
+  number: string;
+  name: string | null;
+  contactId: string | null;
+  relationship: string;
+  organization: string | null;
+  priority: "high" | "normal" | "low";
+  unknown: boolean;
+}
+
+export interface CallRecordView {
+  id: string;
+  deviceCallId: string;
+  deviceId: string;
+  direction: "incoming" | "outgoing";
+  peer: CallPeerView;
+  state: CallState;
+  decision: { action: string; reason: string; requiresUser: boolean } | null;
+  createdAt: string;
+  updatedAt: string;
+  answeredAt: string | null;
+  endedAt: string | null;
+  durationSec: number | null;
+  transcript: Array<{ role: "caller" | "sara"; text: string; at: string }>;
+}
+
+export interface CallSummaryView {
+  caller: string | null;
+  number: string;
+  purpose: string | null;
+  requests: string[];
+  promises: string[];
+  deadlines: string[];
+  followUps: string[];
+  messages: string[];
+  sentiment: string;
+  urgency: string;
+  basis: string[];
+  notes: string[];
+}
+
+export interface CallMessageView {
+  id: string;
+  callId: string | null;
+  callerName: string | null;
+  number: string;
+  text: string;
+  at: string;
+  source: "call" | "manual";
+}
+
+export interface CallSettingsView {
+  enabled: boolean;
+  answerKnownContacts: "never" | "ask" | "auto";
+  answerFamily: "never" | "ask" | "auto";
+  answerBusinessContacts: "never" | "ask" | "auto";
+  answerUnknownCall: boolean;
+  answerDuringMeetings: boolean;
+  answerDuringFocus: boolean;
+  screenCalls: boolean;
+  takeMessage: boolean;
+  notifyOnMissed: boolean;
+  maxCallMinutes: number;
+}
+
+export interface OutgoingCallPlan {
+  status: "needs_confirmation" | "queued" | "ambiguous" | "unknown_contact" | "refused";
+  message: string;
+  target?: { name: string | null; number: string; contactId: string | null };
+  candidates?: Array<{ id: string; displayName: string }>;
 }
 
 // ---- mobile composition API (server_mobileApi.ts) ----------------------------------------
@@ -285,6 +362,18 @@ export const api = {
   setDnd: (active: boolean) => request<unknown>("POST", "/api/dnd", { active }),
 
   characters: () => request<CharacterSummary[]>("GET", "/api/characters"),
+
+  // Calls. The phone reports states; this UI decides and asks.
+  calls: () => request<{ active: CallRecordView[]; recent: CallRecordView[] }>("GET", "/api/calls?limit=20"),
+  callDetail: (id: string) => request<{ call: CallRecordView; summary: CallSummaryView; messages: CallMessageView[] }>("GET", `/api/calls/${encodeURIComponent(id)}`),
+  callPolicy: () => request<{ calls: CallSettingsView; deviceTokenConfigured: boolean }>("GET", "/api/calls/policy"),
+  updateCallPolicy: (patch: Partial<CallSettingsView>) => request<{ ok: boolean; calls: CallSettingsView }>("POST", "/api/calls/policy", patch),
+  answerCall: (id: string) => request<{ ok: boolean; call: CallRecordView }>("POST", `/api/calls/${encodeURIComponent(id)}/answer`, {}),
+  rejectCall: (id: string) => request<{ ok: boolean; call: CallRecordView }>("POST", `/api/calls/${encodeURIComponent(id)}/reject`, {}),
+  endCall: (id: string) => request<{ ok: boolean; call: CallRecordView }>("POST", `/api/calls/${encodeURIComponent(id)}/end`, {}),
+  saveCallMessage: (id: string, text: string) => request<{ ok: boolean; message: CallMessageView }>("POST", `/api/calls/${encodeURIComponent(id)}/message`, { text }),
+  outgoingCall: (input: { query?: string; number?: string; purpose?: string; confirmed?: boolean }) =>
+    request<OutgoingCallPlan>("POST", "/api/calls/outgoing", input),
 
   // Mobile composition endpoints. They read the same stores as the desktop UI.
   briefing: () => request<MobileBriefing>("GET", "/api/mobile/briefing"),

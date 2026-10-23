@@ -20,6 +20,8 @@ export type AppEventType =
   | "model.status"
   | "notification"
   | "utility.fired"
+  | "call.changed"
+  | "call.message"
   | "character.cue"
   | "autonomy.stopped"
   | "dnd.changed"
