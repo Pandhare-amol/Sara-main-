@@ -53,7 +53,7 @@ async function run() {
   }
 
   // Menu-driven panels.
-  for (const panelTitle of ["Memory", "Connection", "Settings", "Help & diagnostics"]) {
+  for (const panelTitle of ["Today", "Automations", "Look at this", "How she talks", "Memory", "Connection", "Settings", "Self-check", "Help & diagnostics"]) {
     clickByLabel("Open menu");
     await sleep(150);
     check(`menu item "${panelTitle}" present`, clickByText(panelTitle));
@@ -62,6 +62,51 @@ async function run() {
     clickByLabel("Close");
     await sleep(200);
   }
+
+  // The composed briefing must show real content, not an empty shell.
+  clickByLabel("Open menu");
+  await sleep(150);
+  clickByText("Today");
+  await sleep(500);
+  const briefText = document.body.textContent || "";
+  check("briefing shows the greeting", briefText.includes("Two things need you today"));
+  check("briefing lists a reminder", briefText.includes("Call the bank"));
+  check("briefing asks for approval", briefText.includes("Waiting for your approval"));
+  check("briefing names its sources", briefText.includes("sources:"));
+  clickByLabel("Close");
+  await sleep(200);
+
+  // Vision: the capture controls exist and a missing photo keeps Ask disabled.
+  clickByLabel("Open menu");
+  await sleep(150);
+  clickByText("Look at this");
+  await sleep(400);
+  check("vision offers camera capture", Boolean(document.querySelector('input[capture="environment"]')));
+  const askButton = Array.from(document.querySelectorAll("button")).find((n) => (n.textContent || "").includes("Ask Sara"));
+  check("vision cannot ask without a photo", Boolean(askButton && (askButton as HTMLButtonElement).disabled));
+  clickByLabel("Close");
+  await sleep(200);
+
+  // Persona: profiles come from the real settings payload.
+  clickByLabel("Open menu");
+  await sleep(150);
+  clickByText("How she talks");
+  await sleep(500);
+  const personaText = document.body.textContent || "";
+  check("persona panel lists profiles", personaText.includes("Companion") && personaText.includes("Executive"));
+  check("persona panel lists reality modes", personaText.includes("Strict"));
+  clickByLabel("Close");
+  await sleep(200);
+
+  // Stop: two-step arming, never a single accidental tap.
+  clickByLabel("Open menu");
+  await sleep(150);
+  check("stop entry in menu", clickByText("Stop everything"));
+  await sleep(400);
+  check("stop arms before firing", Boolean(Array.from(document.querySelectorAll("button")).find((n) => (n.textContent || "").includes("Arm stop"))));
+  check("stop has no immediate action", !Array.from(document.querySelectorAll("button")).some((n) => (n.textContent || "").includes("Yes, stop everything")));
+  clickByLabel("Close");
+  await sleep(200);
 
   let failed = 0;
   for (const [name, pass] of results) {

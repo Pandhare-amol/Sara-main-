@@ -127,17 +127,77 @@ key screen, which posts it once to the server and stores nothing locally).
 | Avatar (imported MMD model) | ✅ if imported | Streamed from the PC; the public build bundles no model (licence) |
 | PC automation from the phone | ⚠️ opt-in | `SARA_REMOTE_ALLOW_DESKTOP=1`; risky actions still ask for approval |
 | Screen sharing / vision | ❌ desktop only | Marked unsupported on the phone |
-| Camera vision | ❌ not implemented | Not simulated; listed in Help |
+| Camera vision (single photo) | ✅ works | `POST /api/mobile/vision`; downscaled on the phone, needs a Gemini key |
 | Wake phrase | ⚠️ browser-dependent | Web Speech API; Android may stop it in background |
 | Character import / studio | ❌ desktop only | Needs the local file picker and model files |
 | Offline mode | ⚠️ graceful failure | Clear "server unreachable" state; no offline AI |
+| Today / briefing | ✅ works | `GET /api/mobile/briefing` — one composed view of tasks, reminders, approvals, goals |
+| Automations history | ✅ works | `GET /api/mobile/automations` — real schedules + audit log |
+| Self-check | ✅ works | `GET /api/mobile/diagnostics` — live probes, `unknown` where unproven |
+| Personality / reality mode | ✅ works | Persona + Reality Mode below |
+| Emergency stop from the phone | ✅ works | `POST /api/mobile/stop` (arms first; also denies pending approvals) |
+
+## Personality and Reality Mode
+
+Two independent settings, stored with the other server settings
+(`settings/appSettings.ts`) and edited from **Personality** and **Reality mode**
+in the desktop settings panel, or **How she talks** on the phone.
+
+**Personality** changes delivery only. A profile (Companion, Friend, Mentor,
+Professional, Executive, Emergency) preloads seven 0–100 dials — warmth, humour,
+formality, directness, empathy, energy, curiosity — plus a context
+(personal / professional / both). The fragment is appended to the live system
+instruction, so the same rules apply to voice, text and the phone. It is
+explicitly told that it cannot change facts, correctness, permissions or skip a
+confirmation; the test suite asserts that wording.
+
+**Reality Mode** is about honesty:
+
+| Mode | Behaviour |
+| --- | --- |
+| `off` | Natural answers; no labelling taxonomy. Invented facts are still forbidden. |
+| `standard` (default) | FACT / ASSUMPTION / PREDICTION / RECOMMENDATION / UNKNOWN labels where it matters; "what I know" vs "what I infer". |
+| `strict` | The standard set plus counter-evidence for its own recommendation, premise correction, and CONFIDENCE (high/medium/low). |
+
+`challengeAssumptions` (default on) additionally requires naming an unverified
+assumption at least once. In every mode the model is told that a failed tool is
+never reported as done, and that emotional inference is an estimate, not a
+diagnosis.
+
+Switching profiles automatically from inferred mood is **not implemented**. She
+uses the profile you chose; the docs and the settings screen say so rather than
+implying an adaptive engine that does not exist.
+
+Reality Mode labels Sara's language. It is not a fact-checking service: a "FACT"
+means "known to me", not "verified against the world just now". The docs and the
+UI both say so.
+
+## Mobile API (composition layer)
+
+Four endpoints, mounted from `server_mobileApi.ts` by `server.ts`. They read the
+existing stores — no new database, no second memory, no parallel policy — and
+every response carries `sources` and honest `notes`.
+
+| Endpoint | Returns | Notes |
+| --- | --- | --- |
+| `GET /api/mobile/briefing` | Counts, reminders due today, tasks needing you, approvals, open goals, PC status | `pc.availableFromThisDevice` is false when the agent is unreachable or remote PC control is off |
+| `GET /api/mobile/diagnostics` | Key, models, agent, memory, scheduler, remote access, reality mode | States are `ok` / `attention` / `offline` / `unknown` |
+| `GET /api/mobile/automations` | Scheduled reminders and timers, repeating count, skills, recent audit | Includes the note that long-running watchers are **not** implemented |
+| `POST /api/mobile/vision` | Answer, model id, latency, reality mode | JPEG/PNG/WebP, ~4 MB cap, 12/minute, 45 s abort, 409 when no key |
+| `POST /api/mobile/stop` | Stopped task count, denied approvals | Same `emergencyStop` as the desktop shortcut, then denies pending confirmations so nothing resumes on a stale approval |
+
+The phone UI (`src/mobile/MobileIntelPanels.tsx`) adds **Today**,
+**Automations**, **Look at this**, **How she talks**, **Self-check** and
+**Stop everything** to the existing menu. Photos are downscaled to 1280 px JPEG
+on the device before upload.
 
 ## Tests
 
 ```bash
 npm run test:remote-access   # security boundary for phone access
 npm run test:mobile          # URL/token resolution, conversation log
-npm run test:ui              # jsdom smoke tests: phone shell + desktop shell
+npm run test:persona         # persona/reality prompts + /api/mobile/* wire behaviour (33 tests)
+npm run test:ui              # jsdom smoke tests: phone shell (36 checks) + desktop shell (6)
 npm run build:web && npm run check:bundle-secrets
 ```
 

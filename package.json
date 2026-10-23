@@ -27,7 +27,7 @@
     "build:launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-launcher.ps1",
     "test:characters": "node --import tsx --test tests/characters.test.ts",
     "test:agent": "node --import tsx --test tests/core.test.ts tests/models.test.ts tests/agentLoop.test.ts tests/presence.test.ts tests/chatOpen.test.ts",
-    "test": "npm run lint && npm run test:agent && npm run test:characters && npm run test:python && npm run test:remote-access",
+    "test": "npm run lint && npm run test:agent && npm run test:characters && npm run test:python && npm run test:remote-access && npm run test:mobile && npm run test:persona",
     "import:character": "tsx tools/import-character.ts",
     "build:web": "vite build",
     "cap:sync": "npm run build:web && cap sync android",
@@ -35,6 +35,7 @@
     "android:debug": "npm run cap:sync && cd android && ./gradlew assembleDebug",
     "android:release": "npm run cap:sync && cd android && ./gradlew assembleRelease",
     "test:mobile": "node --import tsx --test tests/mobile.test.ts",
+    "test:persona": "node --import tsx --test tests/persona.test.ts tests/mobileApi.test.ts",
     "test:remote-access": "node --import tsx --test tests/remoteAccess.test.ts",
     "check:bundle-secrets": "node scripts/check-bundle-secrets.mjs",
     "test:ui": "node scripts/smoke-ui.mjs"

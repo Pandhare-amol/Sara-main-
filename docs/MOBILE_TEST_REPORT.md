@@ -27,7 +27,7 @@ listed as SKIPPED with the reason.
 | 19 | Vercel/Netlify deployment | **SKIPPED** | no hosting credentials in this environment. Build + SPA rewrite config is committed and CI-verified. |
 | 20 | Live Gemini conversation (voice/text) | **SKIPPED** | requires the user's own API key and a microphone. The pipeline itself is unchanged; the phone reuses it. |
 | 21 | Install/run on a physical Android device | **SKIPPED** | no device or emulator here. Only the cloud compilation and APK content check were performed — this is not claimed as device testing. |
-| 22 | Camera vision on the phone | **NOT IMPLEMENTED** | deliberately not simulated; the Help screen says so. |
+| 22 | Camera vision on the phone | **PASS (phase 4)** | single-photo capture → `POST /api/mobile/vision`; live server returns 409 without a key. A real model call needs the user's key (see addendum). |
 
 ## Backend integration details (item 9)
 
@@ -79,3 +79,29 @@ curl -s localhost:3000/api/health
 # Android (cloud, no Android Studio)
 gh workflow run android-apk.yml --ref main
 ```
+
+## Phase 4 addendum — persona, reality mode, mobile composition API
+
+Executed on **2026-10-23** in this workspace against the code in this branch.
+Same rule as above: a check is only PASS if it actually ran.
+
+| # | Check | Result | Evidence |
+| --- | --- | --- | --- |
+| 23 | TypeScript after the phase-4 changes | **PASS** | `npm run lint` (tsc --noEmit), 0 errors |
+| 24 | Persona / reality prompt tests + mobile API wire tests (`npm run test:persona`) | **PASS** | 33/33 (23 prompt-engine + 10 HTTP) |
+| 25 | Agent/unit suites after the changes | **PASS** | 46 pass, 0 fail, 1 skipped (DPAPI) |
+| 26 | Character tests | **PASS** | all pass, 1 skipped |
+| 27 | Remote-access security tests | **PASS** | 13/13 |
+| 28 | Mobile helper tests | **PASS** | 6/6 |
+| 29 | UI smoke tests (`npm run test:ui`) | **PASS** | phone 36/36 (incl. Today, Automations, Look at this, How she talks, Self-check, Stop arming), desktop 6/6 |
+| 30 | Production web build | **PASS** | `MobileApp` 64.54 kB (17.57 kB gz); desktop and `three` stay in their own chunks |
+| 31 | No secrets in the bundle | **PASS** | 13 files scanned, none found |
+| 32 | Live server: `GET /api/mobile/briefing` | **PASS** | 200, real counts, `notes` explains the offline Windows agent |
+| 33 | Live server: `GET /api/mobile/diagnostics` | **PASS** | `overall:"offline"` with per-item detail — no optimistic default |
+| 34 | Live server: `POST /api/mobile/vision` without a key | **PASS** | 409 `"Sara has no Gemini key yet…"` (refused, not guessed) |
+| 35 | Live server: `POST /api/mobile/stop` | **PASS** | 200 `{stoppedTasks, deniedConfirmations}` and the stop appears in the audit log |
+| 36 | Live server: persona/reality round-trip | **PASS** | `POST /api/app-settings` → briefing reports `executive` / `strict` |
+| 37 | Real vision call with a key | **SKIPPED** | needs the user's Gemini key and a photo; the request path is covered by test #24 and #34 |
+| 38 | Remote phone (non-loopback) hitting the mobile endpoints | **SKIPPED** | the per-device PC-control branch is covered by `tests/mobileApi.test.ts` with the guard's `res.locals.saraRemote`; no second physical device here |
+| 39 | Persona sliders changing live speech | **SKIPPED** | needs a live Gemini session; the directive is unit-tested and is appended to the system instruction |
+| 40 | Camera capture on a physical phone | **SKIPPED** | no device; the jsdom test verifies the capture input and the disabled-until-photo rule |

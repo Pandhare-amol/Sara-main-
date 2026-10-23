@@ -8,8 +8,8 @@
  */
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
-  Activity, Brain, History, Loader2, Menu, Mic, MicOff, Send, Settings as SettingsIcon,
-  ShieldQuestion, Square, Wifi, WifiOff, X,
+  Activity, Brain, CalendarClock, Camera, History, Loader2, Menu, MessageCircleHeart, Mic, MicOff,
+  OctagonX, Send, Settings as SettingsIcon, ShieldQuestion, Square, Wifi, WifiOff, X,
 } from "lucide-react";
 import { useAppEvents } from "../lib/useAppEvents";
 import { detectEmotionFromText } from "../lib/emotion";
@@ -18,6 +18,7 @@ import { useMobileSession } from "./useMobileSession";
 import { useMobilePrefs, useKeyboardInset } from "./mobilePrefs";
 import { MobileStage, accentFor } from "./MobileStage";
 import { DevicePanel, HelpPanel, HistoryPanel, MemoryPanel, MissionsPanel, SettingsPanel, type MobileSheet } from "./MobilePanels";
+import { AutomationsPanel, BriefingPanel, DiagnosticsPanel, PersonaPanel, StopPanel, VisionPanel } from "./MobileIntelPanels";
 import { installNativeShell, setNativeBackHandler } from "./native";
 
 const THEME_STORAGE = "sara.mobile.theme.v1";
@@ -53,6 +54,7 @@ export function MobileApp() {
   const [sheet, setSheet] = useState<MobileSheet>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [draft, setDraft] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [serverOnline, setServerOnline] = useState<boolean | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -187,6 +189,15 @@ export function MobileApp() {
             {activeTask.goal}
           </span>
         </button>
+      )}
+
+      {notice && (
+        <div className="relative z-30 mx-5 mb-1 flex items-start gap-2 rounded-xl border border-emerald-400/20 bg-emerald-500/[0.08] px-3 py-2">
+          <span className="min-w-0 flex-1 text-[11px] leading-relaxed text-emerald-100/85">{notice}</span>
+          <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notice" className="text-emerald-200/60">
+            <X size={12} />
+          </button>
+        </div>
       )}
 
       <MobileStage
@@ -349,11 +360,16 @@ export function MobileApp() {
             aria-label="Sara menu"
           >
             {([
+              ["briefing", CalendarClock, "Today"],
               ["history", History, "Conversation"],
               ["missions", Activity, "Missions"],
+              ["automations", Activity, "Automations"],
               ["memory", Brain, "Memory"],
+              ["vision", Camera, "Look at this"],
+              ["persona", MessageCircleHeart, "How she talks"],
               ["device", Wifi, "Connection"],
               ["settings", SettingsIcon, "Settings"],
+              ["selfcheck", ShieldQuestion, "Self-check"],
               ["help", ShieldQuestion, "Help & diagnostics"],
             ] as const).map(([key, Icon, label]) => (
               <button
@@ -370,6 +386,18 @@ export function MobileApp() {
                 {key === "missions" && activeTask && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-amber-300" />}
               </button>
             ))}
+            <div className="my-1 h-px bg-white/5" />
+            <button
+              type="button"
+              onClick={() => {
+                setSheet("stop");
+                setShowMenu(false);
+              }}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] text-rose-200/80 transition hover:bg-rose-500/10"
+            >
+              <OctagonX size={16} className="text-rose-300/60" />
+              Stop everything
+            </button>
             {!isNativeApp() && getServerConfig().apiBase && (
               <p className="px-3 pb-1 pt-2 text-[10px] leading-relaxed text-white/25">
                 Connected to {getServerConfig().apiBase}
@@ -387,6 +415,12 @@ export function MobileApp() {
       {sheet === "device" && <DevicePanel onClose={() => setSheet(null)} />}
       {sheet === "settings" && <SettingsPanel prefs={prefs} onChange={updatePrefs} onClose={() => setSheet(null)} />}
       {sheet === "help" && <HelpPanel onClose={() => setSheet(null)} state={session.state} events={events} />}
+      {sheet === "briefing" && <BriefingPanel onClose={() => setSheet(null)} onOpenMissions={() => setSheet("missions")} />}
+      {sheet === "automations" && <AutomationsPanel onClose={() => setSheet(null)} />}
+      {sheet === "vision" && <VisionPanel onClose={() => setSheet(null)} />}
+      {sheet === "persona" && <PersonaPanel onClose={() => setSheet(null)} />}
+      {sheet === "stop" && <StopPanel onClose={() => setSheet(null)} onStopped={setNotice} />}
+      {sheet === "selfcheck" && <DiagnosticsPanel onClose={() => setSheet(null)} />}
     </div>
   );
 }

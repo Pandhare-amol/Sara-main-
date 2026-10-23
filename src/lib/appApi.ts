@@ -160,6 +160,71 @@ export interface AppSettings {
   privacy: { screenAwareness: boolean; cameraPresence: boolean; clipboardInContext: boolean };
   performance: { activeFps: number; idleFps: number; sleepFps: number; perceptionPollSec: number };
   developer: { debugView: boolean; physicsDebug: boolean; verboseLogs: boolean };
+  persona: PersonaSettings;
+  reality: RealitySettings;
+}
+
+export type PersonaProfileId = "companion" | "professional" | "executive" | "mentor" | "friend" | "emergency";
+
+export interface PersonaSettings {
+  profile: PersonaProfileId;
+  context: "personal" | "professional" | "both";
+  warmth: number;
+  humor: number;
+  formality: number;
+  directness: number;
+  empathy: number;
+  energy: number;
+  curiosity: number;
+}
+
+export interface RealitySettings {
+  mode: "off" | "standard" | "strict";
+  challengeAssumptions: boolean;
+}
+
+// ---- mobile composition API (server_mobileApi.ts) ----------------------------------------
+
+export interface MobileBriefing {
+  generatedAt: string;
+  greeting: string;
+  mode: { persona: PersonaProfileId; context: PersonaSettings["context"]; reality: RealitySettings["mode"] };
+  counts: { activeTasks: number; needsYou: number; remindersToday: number; finishedToday: number; memories: number; openGoals: number };
+  nextReminders: Array<{ id: string; kind: string; label: string; dueAt: number; inMinutes: number; today: boolean; repeat: string }>;
+  activeTasks: Array<{ id: string; goal: string; state: string; status: string | null; waitingQuestion: string | null }>;
+  pausedTasks: Array<{ id: string; goal: string; state: string }>;
+  confirmations: Array<{ id: string; title: string; description: string; capability: string; createdAt: string }>;
+  finishedToday: Array<{ id: string; goal: string; state: string; result: string | null }>;
+  goals: Array<{ id: string; title: string; progress: number | null; nextAction: string | null }>;
+  pc: { agentOnline: boolean; toolCount: number | null; remoteControlAllowed: boolean; availableFromThisDevice: boolean };
+  notes: string[];
+  sources: string[];
+}
+
+export type DiagnosticState = "ok" | "attention" | "offline" | "unknown";
+
+export interface MobileDiagnostics {
+  generatedAt: string;
+  overall: DiagnosticState;
+  items: Array<{ id: string; label: string; state: DiagnosticState; detail: string; action?: string }>;
+}
+
+export interface MobileAutomations {
+  generatedAt: string;
+  scheduled: Array<{ id: string; kind: string; label: string; dueAt: number; repeat: string; status: string }>;
+  repeating: number;
+  goals: Array<{ id: string; title: string; status: string; progress: number | null; nextAction: string | null }>;
+  skills: Array<{ id: string; name: string }>;
+  activity: Array<{ at: string; kind: string; summary: string; taskId: string | null }>;
+  notes: string[];
+}
+
+export interface VisionAnswer {
+  answer: string;
+  question: string;
+  modelId: string;
+  latencyMs: number;
+  realityMode: RealitySettings["mode"];
 }
 
 /** Deep-partial patch accepted by POST /api/app-settings. */
@@ -220,6 +285,14 @@ export const api = {
   setDnd: (active: boolean) => request<unknown>("POST", "/api/dnd", { active }),
 
   characters: () => request<CharacterSummary[]>("GET", "/api/characters"),
+
+  // Mobile composition endpoints. They read the same stores as the desktop UI.
+  briefing: () => request<MobileBriefing>("GET", "/api/mobile/briefing"),
+  diagnostics: () => request<MobileDiagnostics>("GET", "/api/mobile/diagnostics"),
+  automations: () => request<MobileAutomations>("GET", "/api/mobile/automations"),
+  vision: (image: string, mimeType: string, question: string) =>
+    request<VisionAnswer>("POST", "/api/mobile/vision", { image, mimeType, question }),
+  stopEverything: () => request<{ ok: boolean; stoppedTasks: number; deniedConfirmations: number }>("POST", "/api/mobile/stop", { reason: "phone_stop_button" }),
 };
 
 export const AVAILABILITY_LABEL: Record<ModelAvailability, string> = {

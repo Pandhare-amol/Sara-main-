@@ -13,13 +13,13 @@ import React, { useEffect, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Settings, X, Power, Mic, Cpu, Info, Check, AlertTriangle, Sparkles, KeyRound, Loader2, Brain, ShieldCheck,
-  Bell, Eye, MonitorSmartphone, Lock, Wrench,
+  Bell, Eye, MonitorSmartphone, Lock, Wrench, MessageCircleHeart, Scale,
 } from "lucide-react";
 import type { MyraaSettings } from "../lib/settingsStore";
-import { api, LOCKED_CAPABILITIES, type AppSettings, type AppSettingsPatch, type Decision, type ModelCatalogue, type PermissionsView, type MessageConfirmationMode } from "../lib/appApi";
+import { api, LOCKED_CAPABILITIES, type AppSettings, type AppSettingsPatch, type Decision, type ModelCatalogue, type PermissionsView, type MessageConfirmationMode, type PersonaSettings, type RealitySettings } from "../lib/appApi";
 import { ModelSelectorPanel } from "./ModelSelector";
 
-export type SettingsSection = "general" | "ai" | "voice" | "agent" | "privacy" | "presence" | "character" | "system" | "about";
+export type SettingsSection = "general" | "ai" | "voice" | "persona" | "reality" | "agent" | "privacy" | "presence" | "character" | "system" | "about";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -40,6 +40,8 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Power }[] = [
   { id: "general", label: "General", icon: Power },
   { id: "ai", label: "AI models & keys", icon: Brain },
   { id: "voice", label: "Voice", icon: Mic },
+  { id: "persona", label: "Personality", icon: MessageCircleHeart },
+  { id: "reality", label: "Reality mode", icon: Scale },
   { id: "agent", label: "PC control & safety", icon: ShieldCheck },
   { id: "privacy", label: "Privacy", icon: Lock },
   { id: "presence", label: "Presence", icon: Bell },
@@ -396,6 +398,116 @@ function SystemSection({ app, patch, onRestartOnboarding }: { app: AppSettings; 
   );
 }
 
+const PERSONA_PROFILES: Array<[PersonaSettings["profile"], string]> = [
+  ["companion", "Companion"],
+  ["friend", "Friend"],
+  ["mentor", "Mentor"],
+  ["professional", "Professional"],
+  ["executive", "Executive"],
+  ["emergency", "Emergency"],
+];
+
+/** Each profile preloads the sliders; moving a slider keeps the profile name. */
+const PROFILE_PRESETS: Record<PersonaSettings["profile"], PersonaSettings> = {
+  companion: { profile: "companion", context: "both", warmth: 78, humor: 55, formality: 30, directness: 55, empathy: 75, energy: 60, curiosity: 65 },
+  friend: { profile: "friend", context: "personal", warmth: 72, humor: 70, formality: 22, directness: 60, empathy: 65, energy: 70, curiosity: 62 },
+  mentor: { profile: "mentor", context: "both", warmth: 55, humor: 35, formality: 45, directness: 78, empathy: 55, energy: 50, curiosity: 82 },
+  professional: { profile: "professional", context: "professional", warmth: 45, humor: 30, formality: 68, directness: 70, empathy: 50, energy: 55, curiosity: 55 },
+  executive: { profile: "executive", context: "professional", warmth: 35, humor: 18, formality: 62, directness: 92, empathy: 35, energy: 48, curiosity: 42 },
+  emergency: { profile: "emergency", context: "both", warmth: 40, humor: 5, formality: 40, directness: 95, empathy: 45, energy: 85, curiosity: 20 },
+};
+
+type PersonaDimension = "warmth" | "humor" | "formality" | "directness" | "empathy" | "energy" | "curiosity";
+
+const DIMENSION_ROWS: Array<{ key: PersonaDimension; label: string; low: string; high: string }> = [
+  { key: "warmth", label: "Warmth", low: "Cold", high: "Warm" },
+  { key: "humor", label: "Humour", low: "Serious", high: "Playful" },
+  { key: "formality", label: "Formality", low: "Casual", high: "Formal" },
+  { key: "directness", label: "Directness", low: "Gentle", high: "Blunt" },
+  { key: "empathy", label: "Empathy", low: "Matter-of-fact", high: "Attentive" },
+  { key: "energy", label: "Energy", low: "Calm", high: "Energetic" },
+  { key: "curiosity", label: "Curiosity", low: "Answers only", high: "Asks questions" },
+];
+
+function PersonaSection({ app, patch }: { app: AppSettings; patch: (p: AppSettingsPatch) => void }) {
+  const persona = app.persona;
+  const setDimension = (key: PersonaDimension, value: number) => patch({ persona: { [key]: value } as Partial<PersonaSettings> });
+  return (
+    <div className="space-y-5">
+      <Group title="Profile" hint="A profile is a starting point. It changes how Sara talks — never what she knows, and never what she is allowed to do.">
+        <Row label="Who is she being right now?" description={`${app.persona.profile[0].toUpperCase()}${app.persona.profile.slice(1)} — presets the sliders below.`}>
+          <select aria-label="Personality profile" value={persona.profile}
+            onChange={(e) => patch({ persona: PROFILE_PRESETS[e.target.value as PersonaSettings["profile"]] })}
+            className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white outline-none cursor-pointer">
+            {PERSONA_PROFILES.map(([id, text]) => <option key={id} value={id}>{text}</option>)}
+          </select>
+        </Row>
+        <Row label="Context" description="Which parts of your life she treats as the default topic.">
+          <select aria-label="Personality context" value={persona.context}
+            onChange={(e) => patch({ persona: { context: e.target.value as PersonaSettings["context"] } })}
+            className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white outline-none cursor-pointer">
+            <option value="personal">Personal</option>
+            <option value="professional">Professional</option>
+            <option value="both">Both</option>
+          </select>
+        </Row>
+      </Group>
+
+      <Group title="Tone" hint="These are delivery settings only. They are added to her instructions; they cannot grant permissions or change facts.">
+        {DIMENSION_ROWS.map((row) => (
+          <div key={row.key}>
+            <SliderRow label={row.label} description={`${row.low} → ${row.high}`} min={0} max={100}
+              value={persona[row.key] as number}
+              onChange={(v) => setDimension(row.key, v)} />
+          </div>
+        ))}
+      </Group>
+
+      <Group title="Saving">
+        <Row label="Back to the profile" description="Discard your slider changes and reload the profile's tone.">
+          <button type="button" onClick={() => patch({ persona: PROFILE_PRESETS[persona.profile] })}
+            className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-white/10 cursor-pointer">Reset tone</button>
+        </Row>
+      </Group>
+
+      <Note>
+        Mood is <b>inferred from your words</b>, and inference can be wrong — she is told to say so instead of assuming.
+        Automatic switching between profiles (for example to Emergency when you sound stressed) is <b>not implemented</b>;
+        she uses the profile you set here. That is deliberate: an inferred mood is not a good enough reason to change her whole manner.
+      </Note>
+    </div>
+  );
+}
+
+function RealitySection({ app, patch }: { app: AppSettings; patch: (p: AppSettingsPatch) => void }) {
+  return (
+    <div className="space-y-5">
+      <Group title="Reality mode" hint="How strictly Sara separates what she knows from what she is guessing.">
+        <Row label="Mode" description="Strict also requires counter-evidence and confidence labels when she answers.">
+          <Choice<RealitySettings["mode"]> label="Reality mode" value={app.reality.mode}
+            options={[["off", "Off"], ["standard", "Standard"], ["strict", "Strict"]]}
+            onChange={(v) => patch({ reality: { mode: v } })} />
+        </Row>
+        <ToggleRow label="Challenge my assumptions"
+          description="When your premise is wrong or unproven, she says so before answering."
+          checked={app.reality.challengeAssumptions} onChange={(v) => patch({ reality: { challengeAssumptions: v } })} />
+      </Group>
+
+      <Note tone={app.reality.mode === "off" ? "warn" : "ok"}>
+        {app.reality.mode === "off"
+          ? "Off: she answers normally. No fact / assumption labelling, so a confident guess can read like a fact."
+          : app.reality.mode === "strict"
+            ? "Strict: every substantive answer is split into FACT, ASSUMPTION, PREDICTION, RECOMMENDATION and UNKNOWN, with a confidence level, and she must correct a false premise before answering it."
+            : "Standard: she labels facts, assumptions and unknowns on anything that matters, without making every reply heavy."}
+      </Note>
+
+      <Note>
+        This labels her language. It does not verify anything against the outside world — she has no ground-truth feed, so a FACT still means "known to me", not "checked just now".
+      </Note>
+    </div>
+  );
+}
+
 // ---- panel ----------------------------------------------------------------------------------
 
 export function SettingsPanel({ isOpen, onClose, settings, onChange, appSettings, onAppSettingsChange, initialSection = "general", onOpenStudio, onRestartOnboarding, themeColor }: SettingsPanelProps) {
@@ -618,6 +730,8 @@ export function SettingsPanel({ isOpen, onClose, settings, onChange, appSettings
                   </div>
                 )}
 
+                {section === "persona" && app && <PersonaSection app={app} patch={patch} />}
+                {section === "reality" && app && <RealitySection app={app} patch={patch} />}
                 {section === "system" && app && <SystemSection app={app} patch={patch} onRestartOnboarding={onRestartOnboarding} />}
 
                 {section === "about" && (

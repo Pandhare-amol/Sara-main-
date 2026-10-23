@@ -55,6 +55,9 @@ import {
   type ScreenVisionFrame,
 } from "./server_screenVision";
 import { ApiHubService, type ApiProviderStatus } from "./api_hub";
+import { registerMobileRoutes } from "./server_mobileApi";
+import { personaBlock } from "./server_persona";
+import { publicTaskView } from "./agent/taskSession";
 import {
   authorizeWebSocket,
   createRemoteAccessGuard,
@@ -777,6 +780,62 @@ async function startServer() {
     next();
   });
   runtime.registerRoutes(app);
+
+  // -------------------------------------------------------------------------
+  // Mobile composition API. Reads the same stores as the desktop UI; it adds no
+  // second brain, no second memory and no parallel policy.
+  // -------------------------------------------------------------------------
+  registerMobileRoutes(app, {
+    version: appVersion(),
+    remoteAccess: remoteAccess.enabled,
+    allowDesktopTools: () => !remoteAccess.enabled || remoteAccess.allowDesktopTools,
+    tasks: (limit) => runtime.tasks.list(limit).map((session) => publicTaskView(session) as never),
+    confirmations: () => runtime.confirmations.list(),
+    utilities: () => runtime.utilities.list(),
+    goals: () => cognition.goals.list() as never,
+    skills: () => cognition.skills.list() as never,
+    audit: (limit) => runtime.audit.recent(limit),
+    agentHealth: async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3_000);
+      try {
+        const response = await fetch(`${DESKTOP_AGENT_URL}/health`, { signal: controller.signal });
+        if (!response.ok) return { online: false };
+        const body = (await response.json()) as { tool_count?: number };
+        return { online: true, tool_count: body.tool_count };
+      } catch {
+        return { online: false };
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    hasApiKey: () => hasGeminiApiKey(),
+    models: () => runtime.registry.publicCatalogue() as never,
+    memoryCount: async () => (await loadMemories()).length,
+    settings: () => runtime.settings.get(),
+    generate: async ({ system, text, image, signal }) => {
+      const response = await runtime.router.generate("vision", {
+        system,
+        purpose: "mobile.vision",
+        messages: [{
+          role: "user",
+          parts: [
+            { type: "text", text },
+            { type: "image", mimeType: image.mimeType, data: image.data },
+          ],
+        }],
+        maxOutputTokens: 900,
+        temperature: 0.3,
+      }, { role: "brain", vision: true, timeoutMs: 45_000, signal, maxQuotaWaitMs: 5_000 });
+      return { text: response.text, modelId: response.modelId, latencyMs: response.latencyMs };
+    },
+    emergencyStop: (reason) => runtime.emergencyStop(reason),
+    denyAllConfirmations: () => {
+      const pending = runtime.confirmations.list();
+      for (const request of pending) runtime.confirmations.resolve(request.id, { approved: false, via: "api" });
+      return pending.length;
+    },
+  });
 
   const callApiHubTool = async (
     tool: string,
@@ -2015,11 +2074,14 @@ async function startServer() {
       const voiceStyle = runtime.settings.get().voice.style === "anime"
         ? "VOICE DELIVERY (how you sound, not what you say): speak like a bright, cheerful anime heroine. Light, sweet, slightly higher and youthful tone; lively, bouncy rhythm; smile audibly while talking. Small natural reactions are welcome when they fit (a soft giggle, \"ehehe\", \"hmm~\", an excited \"ooh!\", a pouty \"mou...\"), at most one per reply, never forced. Stay clear and easy to understand, keep the same language mix the user speaks (Hindi/English/Hinglish), and keep task updates short. Calm down to a soft, gentle tone when the user is upset or the topic is serious."
         : "";
+      const settingsSnapshot = runtime.settings.get();
+      const personaInstructions = personaBlock(settingsSnapshot.persona, settingsSnapshot.reality);
       const finalInstructions = [
         formatSystemInstructionsWithMemories(
           `${capabilityInstructions}\n\n${LIVE_AGENT_INSTRUCTIONS}\n\n${presenceInstructions}`,
           memories,
         ),
+        personaInstructions,
         ...(voiceStyle ? [voiceStyle] : []),
         "FINAL TURN DISCIPLINE: Contribute before you inquire. When the user makes an observation or expresses a feeling, answer with a concrete statement and normally zero questions. Never propose learning their routine, preferences, memories, or personal details as the solution to sounding human. Do not claim emotional connection. Let a complete statement end naturally. Never append a reflexive feedback check such as 'Kya bolte ho?', 'right?', 'hai na?', 'what do you think?', or 'kaisa laga?' to an already complete observation.",
       ].join("\n\n");

@@ -11,6 +11,8 @@
 import path from "node:path";
 import { readJsonFile, writeJsonFile } from "../shared/jsonFile";
 
+export type PersonaProfileId = "companion" | "professional" | "executive" | "mentor" | "friend" | "emergency";
+
 export interface AppSettings {
   version: 3;
   onboardingComplete: boolean;
@@ -102,6 +104,32 @@ export interface AppSettings {
     physicsDebug: boolean;
     verboseLogs: boolean;
   };
+  /**
+   * How Sara presents herself. Dimensions are 0..100 and become part of the
+   * live system instruction (server_persona.ts), so a change is audible from
+   * the next turn. They shape delivery, never facts.
+   */
+  persona: {
+    profile: PersonaProfileId;
+    /** Which half of your life she treats as the default context. */
+    context: "personal" | "professional" | "both";
+    warmth: number;
+    humor: number;
+    formality: number;
+    directness: number;
+    empathy: number;
+    energy: number;
+    curiosity: number;
+  };
+  /**
+   * How strictly Sara separates what she knows from what she infers.
+   * "strict" for decisions and numbers.
+   */
+  reality: {
+    mode: "off" | "standard" | "strict";
+    /** Point out contradictions and assumptions instead of smoothing them over. */
+    challengeAssumptions: boolean;
+  };
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -185,6 +213,23 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     physicsDebug: false,
     verboseLogs: false,
   },
+  persona: {
+    profile: "companion",
+    context: "both",
+    warmth: 62,
+    humor: 42,
+    formality: 30,
+    directness: 62,
+    empathy: 60,
+    energy: 50,
+    curiosity: 60,
+  },
+  // FACT / ASSUMPTION / UNKNOWN discipline by default: it costs nothing when
+  // everything is known and prevents confident-sounding guesses when it is not.
+  reality: {
+    mode: "standard",
+    challengeAssumptions: true,
+  },
 };
 
 const clamp = (value: unknown, min: number, max: number, fallback: number) => {
@@ -198,7 +243,7 @@ const bool = (value: unknown, fallback: boolean) => (typeof value === "boolean" 
 export function normalizeSettings(input: unknown, base: AppSettings = DEFAULT_APP_SETTINGS): AppSettings {
   const raw = (input && typeof input === "object" ? input : {}) as Record<string, any>;
   const d = base;
-  const b = raw.behavior || {}, a = raw.autonomy || {}, v = raw.voice || {}, c = raw.companion || {}, ch = raw.character || {}, p = raw.physics || {}, pr = raw.privacy || {}, pe = raw.performance || {}, dev = raw.developer || {}, gr = raw.graphics || {};
+  const b = raw.behavior || {}, a = raw.autonomy || {}, v = raw.voice || {}, c = raw.companion || {}, ch = raw.character || {}, p = raw.physics || {}, pr = raw.privacy || {}, pe = raw.performance || {}, dev = raw.developer || {}, gr = raw.graphics || {}, per = raw.persona || {}, rea = raw.reality || {};
   return {
     version: 3,
     onboardingComplete: bool(raw.onboardingComplete, d.onboardingComplete),
@@ -286,6 +331,21 @@ export function normalizeSettings(input: unknown, base: AppSettings = DEFAULT_AP
       debugView: bool(dev.debugView, d.developer.debugView),
       physicsDebug: bool(dev.physicsDebug, d.developer.physicsDebug),
       verboseLogs: bool(dev.verboseLogs, d.developer.verboseLogs),
+    },
+    persona: {
+      profile: oneOf(per.profile, ["companion", "professional", "executive", "mentor", "friend", "emergency"] as const, d.persona.profile),
+      context: oneOf(per.context, ["personal", "professional", "both"] as const, d.persona.context),
+      warmth: clamp(per.warmth, 0, 100, d.persona.warmth),
+      humor: clamp(per.humor, 0, 100, d.persona.humor),
+      formality: clamp(per.formality, 0, 100, d.persona.formality),
+      directness: clamp(per.directness, 0, 100, d.persona.directness),
+      empathy: clamp(per.empathy, 0, 100, d.persona.empathy),
+      energy: clamp(per.energy, 0, 100, d.persona.energy),
+      curiosity: clamp(per.curiosity, 0, 100, d.persona.curiosity),
+    },
+    reality: {
+      mode: oneOf(rea.mode, ["off", "standard", "strict"] as const, d.reality.mode),
+      challengeAssumptions: bool(rea.challengeAssumptions, d.reality.challengeAssumptions),
     },
   };
 }

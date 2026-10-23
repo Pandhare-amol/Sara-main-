@@ -19,7 +19,10 @@ import type { Memory, MemoryCategory } from "../lib/memoryTypes";
 import { ServerConnectionPanel } from "../components/ServerConnectionPanel";
 import type { MobilePrefs } from "./mobilePrefs";
 
-export type MobileSheet = "history" | "missions" | "memory" | "device" | "settings" | "help" | null;
+export type MobileSheet =
+  | "history" | "missions" | "memory" | "device" | "settings" | "help"
+  | "briefing" | "automations" | "vision" | "persona" | "stop" | "selfcheck"
+  | null;
 
 const TASK_LABEL: Record<TaskView["state"], string> = {
   queued: "Queued",
@@ -649,8 +652,9 @@ export function HelpPanel({ onClose, state, events }: { onClose: () => void; sta
           This phone never runs the desktop agent.
         </HelpItem>
         <HelpItem icon={TriangleAlert} title="Camera vision">
-          Not available in the mobile app yet. Sara's vision works with your desktop screen from the desktop app, and the
-          mobile camera pipeline has not been implemented. Nothing is simulated here.
+          Take a photo from <b>Look at this</b>. The picture is downscaled on the phone and sent to your Sara server,
+          which needs a Gemini key. Without a key the request is refused instead of guessed. Continuous camera
+          watching (Sara seeing on her own) still runs only in the desktop app.
         </HelpItem>
         <HelpItem icon={Wifi} title="Wake phrase">
           Optional and browser-dependent. Android may stop background speech recognition when the screen is off; the
@@ -709,6 +713,12 @@ export const SHEET_TITLES: Record<Exclude<MobileSheet, null>, string> = {
   device: "Connection",
   settings: "Settings",
   help: "Help & diagnostics",
+  briefing: "Today",
+  automations: "Automations",
+  vision: "Look at this",
+  persona: "How she talks",
+  stop: "Stop everything",
+  selfcheck: "Self-check",
 };
 
 export const SHEET_ICONS = { history: History, missions: Activity, memory: Brain, device: Wifi, settings: SettingsIcon, help: ShieldQuestion, close: X };
