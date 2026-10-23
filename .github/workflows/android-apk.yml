@@ -66,12 +66,16 @@ jobs:
       - name: TypeScript checks
         run: npm run lint
 
-      - name: Unit tests (agent, characters, remote access, mobile)
+      - name: Unit tests (agent, characters, remote access, mobile, persona, calls, capabilities, operations)
         run: |
           npm run test:agent
           npm run test:characters
           npm run test:remote-access
           npm run test:mobile
+          npm run test:persona
+          npm run test:calls
+          npm run test:capabilities
+          npm run test:operations
 
       - name: UI smoke tests (phone shell + desktop shell)
         run: npm run test:ui
