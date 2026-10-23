@@ -23,7 +23,8 @@ on:
         type: boolean
         default: false
   push:
-    branches: [main]
+    branches: [main, "arena/**"]
+    tags: ["v*"]
     paths:
       - "src/**"
       - "android/**"
@@ -34,8 +35,6 @@ on:
       - "index.html"
       - "public/**"
       - ".github/workflows/android-apk.yml"
-  tags:
-    - "v*"
 
 permissions:
   contents: read
