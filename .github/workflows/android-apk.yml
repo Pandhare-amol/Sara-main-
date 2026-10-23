@@ -37,7 +37,7 @@ on:
       - ".github/workflows/android-apk.yml"
 
 permissions:
-  contents: read
+  contents: write   # the debug APK is also published to a rolling prerelease
 
 concurrency:
   group: android-apk-${{ github.ref }}
@@ -206,6 +206,19 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
           if-no-files-found: error
+
+      # Artifacts expire and need a GitHub login to fetch; a prerelease asset is
+      # a plain download link the installer can open on the phone.
+      - name: Publish the test APK to the rolling prerelease
+        if: github.event_name == 'push' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view apk-latest >/dev/null 2>&1 ||             gh release create apk-latest               --title "Sara test APK"               --notes "Rolling debug build for trying Sara on a phone. Updated by CI on every push."               --prerelease
+          cp android/app/build/outputs/apk/debug/app-debug.apk "sara-debug-${GITHUB_SHA::7}.apk"
+          gh release upload apk-latest "sara-debug-${GITHUB_SHA::7}.apk" --clobber
+          echo "APK: https://github.com/${GITHUB_REPOSITORY}/releases/tag/apk-latest" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Write build summary
         if: always()

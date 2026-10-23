@@ -39,8 +39,13 @@ token, binds the server to `0.0.0.0`, and runs the normal server with
 
 ## 2. Install the APK
 
-Download the **sara-debug-apk** artifact from the latest successful run in the
-Actions tab (or use the APK handed to you with this change), then:
+Download the APK **on your phone** from the rolling release:
+
+**https://github.com/Pandhare-amol/Sara-main-/releases/tag/apk-latest**
+(file `sara-debug-<commit>.apk`)
+
+The same file is also attached to every CI run as the **sara-debug-apk**
+artifact (Actions → Android APK → latest run). Then:
 
 1. Copy it to the phone (USB, Drive, or `adb install -r sara-debug.apk`).
 2. Tap it → *Install anyway* / allow the source you opened it from.
