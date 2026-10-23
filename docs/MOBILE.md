@@ -139,6 +139,7 @@ key screen, which posts it once to the server and stores nothing locally).
 | Call reporting / answering | ⚠️ partial, by platform | Android app reports call state and places approved calls; Sara cannot speak into a cellular call — see [COMMUNICATION.md](./COMMUNICATION.md) |
 | Messages (WhatsApp Cloud API) | ⚠️ needs provider credentials | Draft → approve → send, verified by the provider's message id; webhook inbound. See [CAPABILITIES_AND_MESSAGING.md](./CAPABILITIES_AND_MESSAGING.md) |
 | Capability list | ✅ works | Self-check → "What this setup can do"; the model is given the same list |
+| Activity receipts + undo | ✅ works | `GET /api/operations`, `POST /api/operations/:id/undo` — every action's real status, `verified` only with evidence, reversible renames/copies/created files. See [OPERATIONS_AND_UNDO.md](./OPERATIONS_AND_UNDO.md) |
 | Call policy, messages, summaries | ✅ works | `Settings → Calls`, `Calls → Policy` on the phone; summaries use only reported material |
 
 ## Personality and Reality Mode
