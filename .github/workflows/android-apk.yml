@@ -199,6 +199,32 @@ jobs:
           unzip -l "$APK" | grep -q "assets/public/index.html"
           echo "APK contents verified."
 
+      # The phone reaches `npm run phone` over plain http on a LAN address, which
+      # only works if the debug overlay actually replaced the release-only
+      # HTTPS rule. Read it back out of the built APK instead of trusting it.
+      - name: Verify the debug APK permits LAN http
+        run: |
+          set -eu
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          AAPT=$(ls "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/aapt2 2>/dev/null | tail -1 || true)
+          if [ -z "${AAPT:-}" ]; then
+            echo "::warning::aapt2 not found; could not verify the cleartext setting."
+            exit 0
+          fi
+          "$AAPT" dump xmltree --file AndroidManifest.xml "$APK" > manifest.txt
+          if grep -q "usesCleartextTraffic" manifest.txt; then
+            if grep -qE "usesCleartextTraffic.*0xffffffff" manifest.txt; then
+              echo "Cleartext http is allowed in this debug APK (LAN testing)."
+            else
+              echo "::error::Debug APK still blocks cleartext http; the phone could not reach npm run phone."
+              exit 1
+            fi
+          else
+            echo "::error::usesCleartextTraffic missing from the merged manifest."
+            exit 1
+          fi
+          rm -f manifest.txt
+
       - name: Upload debug APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
