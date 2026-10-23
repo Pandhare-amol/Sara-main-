@@ -199,9 +199,13 @@ jobs:
           unzip -l "$APK" | grep -q "assets/public/index.html"
           echo "APK contents verified."
 
-      # The phone reaches `npm run phone` over plain http on a LAN address, which
-      # only works if the debug overlay actually replaced the release-only
-      # HTTPS rule. Read it back out of the built APK instead of trusting it.
+      # The phone reaches `npm run phone` over plain http on a LAN address, so the
+      # debug APK must permit cleartext. Read that back out of the built APK
+      # instead of trusting the source files.
+      #
+      # On API 24+ the networkSecurityConfig resource wins over the manifest flag,
+      # so either a true flag or a permitting config is sufficient; if neither is
+      # present the build fails, because the phone could not connect.
       - name: Verify the debug APK permits LAN http
         run: |
           set -eu
@@ -211,19 +215,25 @@ jobs:
             echo "::warning::aapt2 not found; could not verify the cleartext setting."
             exit 0
           fi
+
           "$AAPT" dump xmltree --file AndroidManifest.xml "$APK" > manifest.txt
-          if grep -q "usesCleartextTraffic" manifest.txt; then
-            if grep -qE "usesCleartextTraffic.*0xffffffff" manifest.txt; then
-              echo "Cleartext http is allowed in this debug APK (LAN testing)."
-            else
-              echo "::error::Debug APK still blocks cleartext http; the phone could not reach npm run phone."
-              exit 1
-            fi
+          "$AAPT" dump xmltree --file res/xml/network_security_config.xml "$APK" > nsc.txt 2>/dev/null || true
+
+          grep -i "cleartext" manifest.txt | head -3 | while IFS= read -r line; do echo "::warning::manifest: $line"; done || true
+          grep -i "cleartext" nsc.txt | head -3 | while IFS= read -r line; do echo "::warning::network config: $line"; done || true
+
+          MANIFEST_OK=0
+          if grep -qiE "usesCleartextTraffic.*0xffffffff" manifest.txt; then MANIFEST_OK=1; fi
+          NSC_OK=0
+          if grep -qiE "cleartextTrafficPermitted.*0xffffffff" nsc.txt; then NSC_OK=1; fi
+
+          if [ "$MANIFEST_OK" = "1" ] || [ "$NSC_OK" = "1" ]; then
+            echo "Cleartext http allowed in this debug APK (manifest=$MANIFEST_OK, network config=$NSC_OK)."
           else
-            echo "::error::usesCleartextTraffic missing from the merged manifest."
+            echo "::error::Debug APK blocks cleartext http (manifest=$MANIFEST_OK, network config=$NSC_OK); the phone could not reach npm run phone."
             exit 1
           fi
-          rm -f manifest.txt
+          rm -f manifest.txt nsc.txt
 
       - name: Upload debug APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
