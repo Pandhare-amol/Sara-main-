@@ -45,3 +45,4 @@ android-mobile/local.properties
 android-mobile/app/build/
 android-mobile/app/src/main/assets/public/
 android-mobile/app/src/main/assets/capacitor.config.json
+dist-mobile/
