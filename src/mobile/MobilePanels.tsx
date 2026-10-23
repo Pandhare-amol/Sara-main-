@@ -628,7 +628,7 @@ export function HelpPanel({ onClose, state, events }: { onClose: () => void; sta
   const config = getServerConfig();
   const [copied, setCopied] = useState(false);
   const diagnostics = [
-    `Sara ${__APP_VERSION__}`,
+    `Sara ${typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev"}`,
     `UI: mobile shell`,
     `Platform: ${isNativeApp() ? "Android app" : "browser"}`,
     `Server: ${config.apiBase || window.location.origin}`,

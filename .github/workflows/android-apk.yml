@@ -73,6 +73,9 @@ jobs:
           npm run test:remote-access
           npm run test:mobile
 
+      - name: UI smoke tests (phone shell + desktop shell)
+        run: npm run test:ui
+
       - name: Production web build
         run: npm run build:web
 

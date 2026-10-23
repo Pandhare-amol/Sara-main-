@@ -1,7 +1,7 @@
 {
   "name": "sara",
   "productName": "Sara",
-  "description": "Sara \u2014 a private 3D AI desktop companion powered by each user's own Gemini API key.",
+  "description": "Sara — a private 3D AI desktop companion powered by each user's own Gemini API key.",
   "author": "Sara",
   "private": true,
   "version": "1.5.2",
@@ -36,7 +36,8 @@
     "android:release": "npm run cap:sync && cd android && ./gradlew assembleRelease",
     "test:mobile": "node --import tsx --test tests/mobile.test.ts",
     "test:remote-access": "node --import tsx --test tests/remoteAccess.test.ts",
-    "check:bundle-secrets": "node scripts/check-bundle-secrets.mjs"
+    "check:bundle-secrets": "node scripts/check-bundle-secrets.mjs",
+    "test:ui": "node scripts/smoke-ui.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.9",
@@ -68,6 +69,7 @@
     "electron": "^43.1.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",
+    "jsdom": "^30.1.3",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

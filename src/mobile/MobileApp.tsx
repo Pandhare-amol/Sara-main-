@@ -160,7 +160,7 @@ export function MobileApp() {
         </div>
 
         <div className="ml-auto flex items-center gap-1.5">
-          <span className="hidden xs:inline-flex items-center gap-1 rounded-full border border-white/5 bg-white/[0.03] px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-white/35">
+          <span className="hidden min-[380px]:inline-flex items-center gap-1 rounded-full border border-white/5 bg-white/[0.03] px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-white/35">
             {serverOnline === false ? <WifiOff size={10} /> : <Wifi size={10} />}
             {serverOnline === false ? "offline" : "online"}
           </span>
