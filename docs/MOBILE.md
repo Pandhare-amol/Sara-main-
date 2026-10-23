@@ -132,6 +132,18 @@ key screen, which posts it once to the server and stores nothing locally).
 | Character import / studio | ❌ desktop only | Needs the local file picker and model files |
 | Offline mode | ⚠️ graceful failure | Clear "server unreachable" state; no offline AI |
 
+## Tests
+
+```bash
+npm run test:remote-access   # security boundary for phone access
+npm run test:mobile          # URL/token resolution, conversation log
+npm run test:ui              # jsdom smoke tests: phone shell + desktop shell
+npm run build:web && npm run check:bundle-secrets
+```
+
+Results, including what could not be verified here, are in
+[MOBILE_TEST_REPORT.md](./MOBILE_TEST_REPORT.md).
+
 ## Reduced motion and low-end phones
 
 Settings (phone) → **Reduced motion**, **Show avatar**. `prefers-reduced-motion`
