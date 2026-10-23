@@ -7,7 +7,7 @@
  */
 import { useState, type FormEvent } from "react";
 import { Check, Loader2, PlugZap, ShieldCheck, TriangleAlert } from "lucide-react";
-import { getServerConfig, isNativeApp, saveServerConfig, type SaraServerConfig } from "../lib/serverConfig";
+import { getServerConfig, isNativeApp, normalizeServerAddress, saveServerConfig, type SaraServerConfig } from "../lib/serverConfig";
 
 interface Props {
   onConnected?: (config: SaraServerConfig) => void;
@@ -21,12 +21,8 @@ type TestResult =
   | { state: "ok"; latencyMs: number; version?: string; remoteAccess?: boolean }
   | { state: "error"; message: string };
 
-function normalizeBase(raw: string): string {
-  const value = raw.trim().replace(/\/+$/, "");
-  if (!value) return "";
-  if (/^https?:\/\//i.test(value)) return value;
-  return `https://${value.replace(/^\/+/, "")}`;
-}
+/** Same rules as the saved config, so "test" and "save" cannot disagree. */
+const normalizeBase = (raw: string): string => normalizeServerAddress(raw);
 
 export function ServerConnectionPanel({ onConnected, embedded = false }: Props) {
   const current = getServerConfig();
@@ -122,7 +118,7 @@ export function ServerConnectionPanel({ onConnected, embedded = false }: Props) 
               setBaseUrl(event.target.value);
               setResult({ state: "idle" });
             }}
-            placeholder="https://sara.example.com"
+            placeholder="http://192.168.1.20:3000"
             aria-label="Sara server address"
             className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition focus:border-indigo-400/60 focus:ring-2 focus:ring-indigo-500/20"
           />
@@ -189,7 +185,9 @@ export function ServerConnectionPanel({ onConnected, embedded = false }: Props) 
         <p className="flex items-start gap-2 text-[11px] leading-relaxed text-white/35">
           <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
-            Use an <strong className="font-medium text-white/55">https://</strong> address exposed by a tunnel or reverse proxy.
+            Use the address printed by <strong className="font-medium text-white/55">npm run phone</strong> on the PC that runs Sara
+            (for example http://192.168.1.20:3000), or an <strong className="font-medium text-white/55">https://</strong> address from a tunnel.
+            The debug APK allows plain http on your own network; release builds require https.
             {" "}The token stays on this device and is never placed in the build.
             {isNativeApp() ? "" : " On a computer, leave the address empty to use the local server."}
           </span>

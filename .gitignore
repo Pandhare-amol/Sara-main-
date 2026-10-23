@@ -35,3 +35,6 @@ android/app/src/main/assets/capacitor.plugins.json
 keystore.properties
 *.keystore
 *.jks
+
+# Phone access token created by scripts/start-phone-server.mjs
+.sara-phone.json

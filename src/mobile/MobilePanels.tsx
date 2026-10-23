@@ -21,7 +21,7 @@ import type { MobilePrefs } from "./mobilePrefs";
 
 export type MobileSheet =
   | "history" | "missions" | "memory" | "device" | "settings" | "help"
-  | "briefing" | "automations" | "vision" | "persona" | "stop" | "selfcheck" | "calls" | "messages" | "activity" | "look"
+  | "briefing" | "automations" | "vision" | "persona" | "stop" | "selfcheck" | "calls" | "messages" | "activity" | "look" | "pc-screen" | "device-prefs" | "studio"
   | null;
 
 const TASK_LABEL: Record<TaskView["state"], string> = {
@@ -478,7 +478,7 @@ export function SettingsPanel({
   onClose: () => void;
 }) {
   return (
-    <Sheet title="Settings" subtitle="This device. Sara's own settings stay on her server." onClose={onClose}>
+    <Sheet title="This device" subtitle="Only this phone: motion, avatar, wake phrase and this phone's conversation log. Sara's own settings are under Settings." onClose={onClose}>
       <div className="space-y-2">
         <Toggle label="Reduced motion" hint="Freeze ambient particles and idle animation." value={prefs.reducedMotion} onChange={(value) => onChange({ reducedMotion: value })} />
         <Toggle label="Show avatar" hint="Turn off to save battery and memory on low-end phones." value={prefs.avatarEnabled} onChange={(value) => onChange({ avatarEnabled: value })} />
@@ -723,6 +723,9 @@ export const SHEET_TITLES: Record<Exclude<MobileSheet, null>, string> = {
   messages: "Messages",
   activity: "Activity",
   look: "Companion look",
+  "pc-screen": "PC screen",
+  "device-prefs": "This device",
+  studio: "Character Studio",
 };
 
 export const SHEET_ICONS = { history: History, missions: Activity, memory: Brain, device: Wifi, settings: SettingsIcon, help: ShieldQuestion, close: X };

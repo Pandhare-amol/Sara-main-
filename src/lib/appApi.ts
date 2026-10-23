@@ -451,6 +451,15 @@ export const api = {
   outgoingCall: (input: { query?: string; number?: string; purpose?: string; confirmed?: boolean }) =>
     request<OutgoingCallPlan>("POST", "/api/calls/outgoing", input),
 
+  // The PC's own screen. Desktop-only on the server unless the operator opts in
+  // with SARA_REMOTE_ALLOW_DESKTOP=1; a 403 is reported, never hidden.
+  capturePcScreen: (maxDim = 1024) =>
+    request<{ ok: boolean; width: number; height: number; active_window: string | null; image_base64: string; image_mime: string; source: string }>(
+      "POST",
+      "/api/screen-vision",
+      { max_dim: maxDim },
+    ),
+
   // Operation receipts and undo.
   operations: (limit = 40) => request<{ operations: OperationView[] }>("GET", `/api/operations?limit=${limit}`),
   undoOperation: (id: string) =>

@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Activity, Brain, CalendarClock, Camera, History, Loader2, Menu, MessageCircleHeart, MessageSquare, Mic, MicOff,
-  Film, OctagonX, Phone, Send, Settings as SettingsIcon, ShieldQuestion, Square, Wifi, WifiOff, X,
+  Film, Monitor, OctagonX, Phone, Send, Settings as SettingsIcon, ShieldQuestion, Smartphone, Square, Wifi, WifiOff, X,
 } from "lucide-react";
 import { useAppEvents } from "../lib/useAppEvents";
 import { detectEmotionFromText } from "../lib/emotion";
@@ -18,8 +18,12 @@ import { useMobileSession } from "./useMobileSession";
 import { useMobilePrefs, useKeyboardInset } from "./mobilePrefs";
 import { MobileStage, accentFor, type StageClip } from "./MobileStage";
 import { CompanionLookPanel } from "./CompanionLookPanel";
+import { PcScreenPanel, SettingsUnavailablePanel, StudioUnavailablePanel } from "./MobilePcPanels";
 import { clearVideo, loadVideoBlob, loadVideoMeta, saveVideoFile, type VideoAsset } from "./videoStage";
 import { DevicePanel, HelpPanel, HistoryPanel, MemoryPanel, MissionsPanel, SettingsPanel, type MobileSheet } from "./MobilePanels";
+import { SettingsPanel as ServerSettingsPanel } from "../components/SettingsPanel";
+import { loadSettings, saveSettings, type MyraaSettings } from "../lib/settingsStore";
+import { api, type AppSettings, type AppSettingsPatch } from "../lib/appApi";
 import {
   ActivityPanel, AutomationsPanel, BriefingPanel, CallsPanel, DiagnosticsPanel, MessagesPanel, PersonaPanel, StopPanel, VisionPanel,
 } from "./MobileIntelPanels";
@@ -66,6 +70,10 @@ export function MobileApp() {
   const [clipFailed, setClipFailed] = useState(false);
   const [clipBusy, setClipBusy] = useState(false);
   const clipUrlRef = useRef<string | null>(null);
+  // Server settings are the same object the desktop UI edits — the phone is a
+  // client of that server, not a second configuration store.
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+  const [deviceSettings, setDeviceSettings] = useState<MyraaSettings>(() => loadSettings());
   const inputRef = useRef<HTMLInputElement | null>(null);
   const accent = accentFor(theme);
 
@@ -91,6 +99,48 @@ export function MobileApp() {
       if (clipUrlRef.current === created) clipUrlRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .appSettings()
+      .then((next) => {
+        if (!cancelled) setAppSettings(next);
+      })
+      .catch(() => {
+        // A phone that is not connected yet keeps the page usable; the settings
+        // panel shows its own connection guidance when it opens.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serverOnline]);
+
+  const changeAppSettings = (patch: AppSettingsPatch) => {
+    // Optimistic per-section merge so a toggle responds instantly, then the
+    // server's validated copy replaces it.
+    setAppSettings((current) => {
+      if (!current) return current;
+      const next = { ...current } as Record<string, unknown>;
+      for (const [key, value] of Object.entries(patch)) {
+        const base = (current as unknown as Record<string, unknown>)[key];
+        next[key] = value && typeof value === "object" && base && typeof base === "object" ? { ...(base as object), ...(value as object) } : value;
+      }
+      return next as unknown as AppSettings;
+    });
+    void api
+      .updateAppSettings(patch)
+      .then(setAppSettings)
+      .catch((error) => setNotice(error instanceof Error ? error.message : String(error)));
+  };
+
+  const changeDeviceSettings = (patch: Partial<MyraaSettings>) => {
+    setDeviceSettings((current) => {
+      const next = { ...current, ...patch };
+      saveSettings(next);
+      return next;
+    });
+  };
 
   function replaceClip(asset: VideoAsset | null, blob: Blob | null) {
     // Revoke outside the state updater: React may invoke updaters twice in
@@ -175,6 +225,10 @@ export function MobileApp() {
   const emotion = useMemo(() => (caption ? detectEmotionFromText(caption) : "idle"), [caption]);
   const characterState = session.state === "speaking" ? "talking" : session.state === "connecting" || (session.userCaption && !session.saraCaption) ? "thinking" : "idle";
   const micBlocked = session.micStatus === "denied" || session.micStatus === "unsupported";
+  // The full settings panel is the desktop one, and it assumes the server's
+  // complete settings object. Until that arrives (or if an older server returns
+  // a partial one) we show the honest state instead of crashing the shell.
+  const serverSettingsReady = Boolean(appSettings?.behavior && appSettings?.voice && appSettings?.calls);
   const stageClip: StageClip | null =
     prefs.stageMode === "video" && clipUrl && !clipFailed
       ? {
@@ -462,7 +516,9 @@ export function MobileApp() {
               ["look", Film, "Companion look"],
               ["vision", Camera, "Look at this"],
               ["persona", MessageCircleHeart, "How she talks"],
+              ["pc-screen", Monitor, "PC screen"],
               ["device", Wifi, "Connection"],
+              ["device-prefs", Smartphone, "This device"],
               ["settings", SettingsIcon, "Settings"],
               ["selfcheck", ShieldQuestion, "Self-check"],
               ["help", ShieldQuestion, "Help & diagnostics"],
@@ -508,7 +564,30 @@ export function MobileApp() {
       )}
       {sheet === "memory" && <MemoryPanel onClose={() => setSheet(null)} />}
       {sheet === "device" && <DevicePanel onClose={() => setSheet(null)} />}
-      {sheet === "settings" && <SettingsPanel prefs={prefs} onChange={updatePrefs} onClose={() => setSheet(null)} />}
+      {sheet === "settings" &&
+        (serverSettingsReady ? (
+          <ServerSettingsPanel
+            isOpen
+            onClose={() => setSheet(null)}
+            settings={deviceSettings}
+            onChange={changeDeviceSettings}
+            appSettings={appSettings}
+            onAppSettingsChange={changeAppSettings}
+            initialSection="general"
+            onOpenStudio={() => setSheet("studio")}
+            onRestartOnboarding={() => setSheet(null)}
+            themeColor={theme}
+          />
+        ) : (
+          <SettingsUnavailablePanel
+            connected={serverOnline === true}
+            onRetry={() => setServerOnline(null)}
+            onClose={() => setSheet(null)}
+          />
+        ))}
+      {sheet === "device-prefs" && <SettingsPanel prefs={prefs} onChange={updatePrefs} onClose={() => setSheet(null)} />}
+      {sheet === "pc-screen" && <PcScreenPanel onClose={() => setSheet(null)} />}
+      {sheet === "studio" && <StudioUnavailablePanel onClose={() => setSheet(null)} />}
       {sheet === "help" && <HelpPanel onClose={() => setSheet(null)} state={session.state} events={events} />}
       {sheet === "briefing" && <BriefingPanel onClose={() => setSheet(null)} onOpenMissions={() => setSheet("missions")} />}
       {sheet === "automations" && <AutomationsPanel onClose={() => setSheet(null)} />}

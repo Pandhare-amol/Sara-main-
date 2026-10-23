@@ -6,7 +6,7 @@
  * per-frame data is pushed through a ref into the running loop rather than
  * through React state, so the animation never depends on React's scheduler.
  */
-import { saraFetch } from "../lib/serverConfig";
+import { isNativeApp, saraFetch } from "../lib/serverConfig";
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles, TriangleAlert } from 'lucide-react';
 import { CharacterSystem } from './core/CharacterSystem';
@@ -75,7 +75,14 @@ const ImportFirstCharacter: React.FC = () => {
   const pick = async () => {
     const bridge = (window as unknown as { myraa?: { pickCharacterSource?: () => Promise<string | null> } }).myraa;
     if (!bridge?.pickCharacterSource) {
-      setMessage('Open Settings → Character → Character Studio to import a model.');
+      // Phones have no desktop file bridge: the model is imported on the PC and
+      // streams to the phone, so say that instead of pointing at a screen the
+      // phone does not have.
+      setMessage(
+        isNativeApp()
+          ? 'Import the model on the PC that runs Sara (Settings → Character & companion → Character Studio). It then streams to this phone.'
+          : 'Open Settings → Character → Character Studio to import a model.',
+      );
       return;
     }
     const source = await bridge.pickCharacterSource();

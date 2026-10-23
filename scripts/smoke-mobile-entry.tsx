@@ -6,6 +6,27 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { MobileApp } from "../src/mobile/MobileApp";
+import { SMOKE_APP_SETTINGS } from "./smoke-settings-fixture";
+
+// The phone now mounts the real settings panel, which expects the server's full
+// settings object. Override the shared stub for that one endpoint so the smoke
+// test exercises the same shape the real server returns.
+const realFetch = (window.fetch ?? globalThis.fetch)?.bind(window);
+if (realFetch) {
+  const settingsFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input && (input as Request).url ? (input as Request).url : input);
+    if (url.includes("/api/app-settings")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(SMOKE_APP_SETTINGS), { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    }
+    return realFetch(input, init);
+  }) as typeof window.fetch;
+  // Bundled code calls the bare `fetch`, which resolves to the global, not to
+  // `window.fetch` — both have to point at the override.
+  window.fetch = settingsFetch;
+  (globalThis as unknown as { fetch: typeof window.fetch }).fetch = settingsFetch;
+}
 
 const results: Array<[string, boolean]> = [];
 const check = (name: string, pass: boolean) => results.push([name, pass]);
@@ -17,6 +38,14 @@ const clickByLabel = (label: string) => {
   (element as HTMLElement).dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   return true;
 };
+/** The full settings overlay labels its close button differently. */
+const closePanel = () => {
+  if (clickByLabel("Close")) return true;
+  if (clickByLabel("Close settings")) return true;
+  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  return false;
+};
+
 const clickByText = (text: string) => {
   const element = Array.from(document.querySelectorAll("button")).find(
     (node) => (node.textContent || "").trim() === text,
@@ -48,18 +77,73 @@ async function run() {
     const opened = html().includes(panelTitle);
     check(`panel "${panelTitle}" opens`, opened);
     if (!opened && process.env.SARA_SMOKE_DEBUG) console.log((document.body.textContent || "").slice(-600));
-    clickByLabel("Close");
+    closePanel();
     await sleep(200);
   }
 
   // Menu-driven panels.
-  for (const panelTitle of ["Today", "Calls", "Messages", "Automations", "Companion look", "Look at this", "How she talks", "Memory", "Connection", "Settings", "Self-check", "Help & diagnostics"]) {
+  for (const panelTitle of [
+    "Today", "Calls", "Messages", "Automations", "Companion look", "PC screen", "Look at this", "How she talks",
+    "Memory", "Connection", "This device", "Settings", "Self-check", "Help & diagnostics",
+  ]) {
     clickByLabel("Open menu");
     await sleep(150);
     check(`menu item "${panelTitle}" present`, clickByText(panelTitle));
     await sleep(400);
     check(`panel "${panelTitle}" opens`, (document.body.textContent || "").includes(panelTitle));
-    clickByLabel("Close");
+    closePanel();
+    await sleep(200);
+  }
+
+  // Settings parity: the phone mounts the same panel as the desktop, with every
+  // section reachable, not a cut-down copy.
+  await sleep(800);
+  clickByLabel("Open menu");
+  await sleep(250);
+  clickByText("Settings");
+  await sleep(1_200);
+  if (process.env.SARA_SMOKE_DEBUG) console.log("[settings]", (document.body.textContent || "").slice(0, 400));
+  const settingsText = document.body.textContent || "";
+  for (const section of ["General", "AI models & keys", "Voice", "Personality", "Reality mode", "Calls", "PC control & safety", "Privacy", "Presence", "Character & companion", "System"]) {
+    check(`settings has "${section}"`, settingsText.includes(section));
+  }
+  check("settings says it saves automatically", settingsText.includes("Changes save automatically"));
+  // Settings sections are tabs: the voice controls only exist once Voice is open.
+  clickByText("Voice");
+  await sleep(400);
+  const voiceSelect = document.querySelector('select[aria-label="Voice"]') as HTMLSelectElement | null;
+  check("settings shows the real voice list", Boolean(voiceSelect && voiceSelect.options.length >= 6 && voiceSelect.value === "Aoede"));
+  closePanel();
+  await sleep(250);
+
+  // PC screen: the phone can look at the computer's screen, and a refusal has to
+  // be explainable (the smoke stub has no image, so the button must exist and
+  // the explanation must name the opt-in).
+  clickByLabel("Open menu");
+  await sleep(150);
+  clickByText("PC screen");
+  await sleep(400);
+  const pcText = document.body.textContent || "";
+  check("pc screen offers a capture", Boolean(Array.from(document.querySelectorAll("button")).find((n) => (n.textContent || "").includes("Capture the PC screen"))));
+  check("pc screen names the remote opt-in", pcText.includes("SARA_REMOTE_ALLOW_DESKTOP=1"));
+  closePanel();
+  await sleep(200);
+
+  // Character Studio is desktop-only and must say so rather than disappear.
+  clickByLabel("Open menu");
+  await sleep(150);
+  clickByText("Settings");
+  await sleep(600);
+  clickByText("Character & companion");
+  await sleep(300);
+  const openStudio = Array.from(document.querySelectorAll("button")).find((n) => (n.textContent || "").trim() === "Open");
+  check("character section offers the studio entry", Boolean(openStudio));
+  if (openStudio) {
+    (openStudio as HTMLElement).dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await sleep(400);
+    const studioText = document.body.textContent || "";
+    check("studio says it is desktop-only", studioText.includes("not available on the phone"));
+    closePanel();
     await sleep(200);
   }
 
@@ -74,7 +158,7 @@ async function run() {
   check("companion look keeps the clip on the device", lookText.includes("never uploaded"));
   check("companion look states the storage limitation", lookText.includes("does not allow local video storage"));
   check("companion look offers the 3D character", lookText.includes("3D character"));
-  clickByLabel("Close");
+  closePanel();
   await sleep(200);
 
   // The composed briefing must show real content, not an empty shell.
@@ -87,7 +171,7 @@ async function run() {
   check("briefing lists a reminder", briefText.includes("Call the bank"));
   check("briefing asks for approval", briefText.includes("Waiting for your approval"));
   check("briefing names its sources", briefText.includes("sources:"));
-  clickByLabel("Close");
+  closePanel();
   await sleep(200);
 
   // Vision: the capture controls exist and a missing photo keeps Ask disabled.
@@ -98,7 +182,7 @@ async function run() {
   check("vision offers camera capture", Boolean(document.querySelector('input[capture="environment"]')));
   const askButton = Array.from(document.querySelectorAll("button")).find((n) => (n.textContent || "").includes("Ask Sara"));
   check("vision cannot ask without a photo", Boolean(askButton && (askButton as HTMLButtonElement).disabled));
-  clickByLabel("Close");
+  closePanel();
   await sleep(200);
 
   // Persona: profiles come from the real settings payload.
@@ -109,7 +193,7 @@ async function run() {
   const personaText = document.body.textContent || "";
   check("persona panel lists profiles", personaText.includes("Companion") && personaText.includes("Executive"));
   check("persona panel lists reality modes", personaText.includes("Strict"));
-  clickByLabel("Close");
+  closePanel();
   await sleep(200);
 
   // Calls: the live call is shown with its policy reason and the two actions.
@@ -122,7 +206,7 @@ async function run() {
   check("calls panel explains the policy", callText.includes("policy says ask"));
   check("calls panel offers answer and decline", callText.includes("Answer") && callText.includes("Decline"));
   check("calls panel refuses to fake unknown-caller answering", callText.includes("never answers an unknown number"));
-  clickByLabel("Close");
+  closePanel();
   await sleep(200);
 
   // Messages: the inbox shows classification and a send needs a second tap.
@@ -136,7 +220,7 @@ async function run() {
   check("messages panel explains importance", msgText.includes("urgency or a deadline"));
   const prepare = Array.from(document.querySelectorAll("button")).find((n) => (n.textContent || "").includes("Prepare message"));
   check("messages cannot send without a draft", Boolean(prepare && (prepare as HTMLButtonElement).disabled));
-  clickByLabel("Close");
+  closePanel();
   await sleep(200);
 
   // Self-check now lists capabilities, including what is unavailable.
@@ -155,7 +239,7 @@ async function run() {
   await sleep(400);
   check("stop arms before firing", Boolean(Array.from(document.querySelectorAll("button")).find((n) => (n.textContent || "").includes("Arm stop"))));
   check("stop has no immediate action", !Array.from(document.querySelectorAll("button")).some((n) => (n.textContent || "").includes("Yes, stop everything")));
-  clickByLabel("Close");
+  closePanel();
   await sleep(200);
 
   let failed = 0;

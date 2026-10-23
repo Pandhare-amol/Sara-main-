@@ -41,7 +41,8 @@
     "test:remote-access": "node --import tsx --test tests/remoteAccess.test.ts",
     "check:bundle-secrets": "node scripts/check-bundle-secrets.mjs",
     "test:ui": "node scripts/smoke-ui.mjs",
-    "test:operations": "node --import tsx --test tests/operations.test.ts"
+    "test:operations": "node --import tsx --test tests/operations.test.ts",
+    "phone": "node scripts/start-phone-server.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.9",

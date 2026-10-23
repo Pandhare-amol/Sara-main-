@@ -42,11 +42,32 @@ declare global {
 
 const STORAGE_KEY = "sara.server.v1";
 
+/** LAN-shaped hosts: private IPv4, link-local, mDNS or a single-label name. */
+function looksLikeLanHost(host: string): boolean {
+  const name = host.replace(/:\d+$/, "").toLowerCase();
+  return (
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(name) ||
+    name.endsWith(".local") ||
+    name.endsWith(".lan") ||
+    name.endsWith(".home")
+  );
+}
+
+/** Public helper: turn what a user typed into a usable base URL ("" if junk). */
+export function normalizeServerAddress(raw: string | undefined | null): string {
+  return normalizeBase(raw);
+}
+
 function normalizeBase(raw: string | undefined | null): string {
   const value = String(raw ?? "").trim().replace(/\/+$/, "");
   if (!value) return "";
   if (/^https?:\/\/[^/]+/i.test(value)) return value;
-  if (/^[a-z0-9.-]+(:\d+)?$/i.test(value)) return `https://${value}`;
+  if (/^[a-z0-9.-]+(:\d+)?$/i.test(value)) {
+    // A bare IP or `.local` name is almost always the PC on the same Wi-Fi
+    // speaking plain HTTP — defaulting it to https:// would fail with a
+    // certificate error that says nothing useful.
+    return `${looksLikeLanHost(value) ? "http" : "https"}://${value}`;
+  }
   return "";
 }
 

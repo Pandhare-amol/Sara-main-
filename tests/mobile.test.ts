@@ -74,6 +74,17 @@ test("a bare host is upgraded to https and junk is rejected", () => {
   assert.equal(getServerConfig().apiBase, "");
 });
 
+test("a bare LAN address defaults to http, a public host to https", () => {
+  saveServerConfig({ apiBase: "192.168.1.20:3000", token: "" });
+  assert.equal(getServerConfig().apiBase, "http://192.168.1.20:3000", "the PC on your Wi-Fi speaks plain http");
+  saveServerConfig({ apiBase: "my-pc.local:3000", token: "" });
+  assert.equal(getServerConfig().apiBase, "http://my-pc.local:3000");
+  saveServerConfig({ apiBase: "sara.example.com", token: "" });
+  assert.equal(getServerConfig().apiBase, "https://sara.example.com", "public hosts stay https");
+  saveServerConfig({ apiBase: "https://tunnel.example.com/", token: "" });
+  assert.equal(getServerConfig().apiBase, "https://tunnel.example.com");
+});
+
 test("native builds without a backend report that setup is needed", () => {
   nativeFlag = true;
   clearServerConfig();
