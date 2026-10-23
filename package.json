@@ -46,7 +46,8 @@
     "build:mobile": "vite build --config vite.mobile.config.ts && node scripts/prepare-mobile-web.mjs",
     "mobile:sync": "npm run build:mobile && node scripts/sync-mobile-android.mjs",
     "android:mobile": "npm run mobile:sync && cd android-mobile && ./gradlew assembleDebug",
-    "test:standalone": "node --import tsx --test tests/standalone.test.ts"
+    "test:standalone": "node --import tsx --test tests/standalone.test.ts",
+    "check:bundle-secrets:mobile": "node scripts/check-bundle-secrets.mjs dist-mobile"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.9",

@@ -328,8 +328,8 @@ jobs:
       - name: Build and sync the standalone app
         run: npm run mobile:sync
 
-      - name: Verify no credentials reached the bundle
-        run: npm run check:bundle-secrets
+      - name: Verify no credentials reached the standalone bundle
+        run: npm run check:bundle-secrets:mobile
 
       - name: Confirm the app bundles local assets with its own identity
         run: |
