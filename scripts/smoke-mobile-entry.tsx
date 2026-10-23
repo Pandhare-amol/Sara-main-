@@ -53,7 +53,7 @@ async function run() {
   }
 
   // Menu-driven panels.
-  for (const panelTitle of ["Today", "Calls", "Messages", "Automations", "Look at this", "How she talks", "Memory", "Connection", "Settings", "Self-check", "Help & diagnostics"]) {
+  for (const panelTitle of ["Today", "Calls", "Messages", "Automations", "Companion look", "Look at this", "How she talks", "Memory", "Connection", "Settings", "Self-check", "Help & diagnostics"]) {
     clickByLabel("Open menu");
     await sleep(150);
     check(`menu item "${panelTitle}" present`, clickByText(panelTitle));
@@ -62,6 +62,20 @@ async function run() {
     clickByLabel("Close");
     await sleep(200);
   }
+
+  // Companion look: a video can be chosen, and the panel is honest about the
+  // device (jsdom has no IndexedDB, so it must say storage is unavailable
+  // rather than offering an upload that would silently fail).
+  clickByLabel("Companion look");
+  await sleep(500);
+  const lookText = document.body.textContent || "";
+  check("companion look offers a video picker", Boolean(document.querySelector('input[aria-label="Choose companion video"]')));
+  check("companion look names the file types", lookText.includes("MP4"));
+  check("companion look keeps the clip on the device", lookText.includes("never uploaded"));
+  check("companion look states the storage limitation", lookText.includes("does not allow local video storage"));
+  check("companion look offers the 3D character", lookText.includes("3D character"));
+  clickByLabel("Close");
+  await sleep(200);
 
   // The composed briefing must show real content, not an empty shell.
   clickByLabel("Open menu");

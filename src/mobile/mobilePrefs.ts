@@ -14,6 +14,12 @@ export interface MobilePrefs {
   autoStartVoice: boolean;
   /** Wake word detection (browser Web Speech API; not available in every browser). */
   wakeWord: boolean;
+  /** What stands on the stage: the 3D character, or a video the user uploaded. */
+  stageMode: "character" | "video";
+  /** Play the uploaded clip's own audio (off = muted, so her voice stays clear). */
+  videoSound: boolean;
+  /** How the uploaded clip fills the stage. */
+  videoFit: "cover" | "contain";
 }
 
 export const DEFAULT_MOBILE_PREFS: MobilePrefs = {
@@ -21,6 +27,9 @@ export const DEFAULT_MOBILE_PREFS: MobilePrefs = {
   avatarEnabled: true,
   autoStartVoice: false,
   wakeWord: false,
+  stageMode: "video",
+  videoSound: false,
+  videoFit: "cover",
 };
 
 const KEY = "sara.mobile.prefs.v1";
@@ -34,7 +43,15 @@ function read(): MobilePrefs {
       return { ...DEFAULT_MOBILE_PREFS, reducedMotion: prefersReduced };
     }
     const parsed = JSON.parse(raw) as Partial<MobilePrefs>;
-    return { ...DEFAULT_MOBILE_PREFS, ...parsed };
+    const merged = { ...DEFAULT_MOBILE_PREFS, ...parsed };
+    // A stored value from an older build (or hand-edited localStorage) must not
+    // be able to put the stage into a state the UI cannot render.
+    return {
+      ...merged,
+      stageMode: merged.stageMode === "character" ? "character" : "video",
+      videoFit: merged.videoFit === "contain" ? "contain" : "cover",
+      videoSound: merged.videoSound === true,
+    };
   } catch {
     return { ...DEFAULT_MOBILE_PREFS };
   }

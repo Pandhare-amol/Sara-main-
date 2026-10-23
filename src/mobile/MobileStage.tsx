@@ -6,11 +6,16 @@
  * same imported model. On a device without an imported model (models are
  * licensed per user and are not bundled) the stage shows a quiet emblem instead
  * of a broken import prompt, because importing requires the desktop file picker.
+ *
+ * A user-uploaded video can take the stage instead. When it does, the 3D
+ * renderer is not mounted at all: one source of animation, not two competing
+ * for the GPU.
  */
 import { useEffect, useState } from "react";
 import type { LiveState } from "../lib/audio";
 import type { MyraaAudioSession } from "../lib/audio";
 import { MyraaCoreVisualizer, type MyraaEmotion } from "../components/MyraaCoreVisualizer";
+import { StageVideo } from "./StageVideo";
 
 const ACCENTS: Record<string, { primary: string; secondary: string }> = {
   violet: { primary: "#a855f7", secondary: "#d946ef" },
@@ -26,6 +31,15 @@ export function accentFor(theme: string): { primary: string; secondary: string }
   return ACCENTS[theme] ?? ACCENTS.celestial;
 }
 
+export interface StageClip {
+  url: string;
+  poster: string | null;
+  muted: boolean;
+  fit: "cover" | "contain";
+  /** Reduced motion holds the clip on its poster until the user taps play. */
+  paused: boolean;
+}
+
 interface Props {
   session: MyraaAudioSession | null;
   state: LiveState;
@@ -34,9 +48,15 @@ interface Props {
   characterState: "idle" | "thinking" | "talking";
   reducedMotion: boolean;
   avatarEnabled: boolean;
+  /** The user's own video, when one is stored and selected. */
+  clip?: StageClip | null;
+  onClipError?: (message: string) => void;
+  onOpenLook?: () => void;
 }
 
-export function MobileStage({ session, state, theme, emotion, characterState, reducedMotion, avatarEnabled }: Props) {
+export function MobileStage({
+  session, state, theme, emotion, characterState, reducedMotion, avatarEnabled, clip, onClipError, onOpenLook,
+}: Props) {
   const accent = accentFor(theme);
   const [characterFailed, setCharacterFailed] = useState(false);
   const active = state !== "disconnected";
@@ -70,7 +90,36 @@ export function MobileStage({ session, state, theme, emotion, characterState, re
         />
       </div>
 
-      {avatarEnabled && !characterFailed ? (
+      {clip ? (
+        <>
+          <StageVideo
+            url={clip.url}
+            poster={clip.poster}
+            muted={clip.muted}
+            fit={clip.fit}
+            paused={clip.paused}
+            onError={(message) => onClipError?.(message)}
+          />
+          {/* Keeps captions readable over a bright clip. */}
+          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(3,4,10,0.55)_0%,rgba(3,4,10,0.08)_35%,rgba(3,4,10,0.12)_65%,rgba(3,4,10,0.6)_100%)]" />
+          <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-[9%]">
+            <div
+              className={`h-24 w-2/3 rounded-[100%] blur-2xl transition-opacity duration-700 ${characterState === "talking" && !reducedMotion ? "animate-pulse" : ""}`}
+              style={{ background: `radial-gradient(ellipse at center, ${accent.primary}33, transparent 70%)`, opacity: 0.6 }}
+            />
+          </div>
+          {onOpenLook && (
+            <button
+              type="button"
+              onClick={onOpenLook}
+              aria-label="Change companion look"
+              className="absolute right-3 top-2 rounded-full border border-white/10 bg-black/40 px-2.5 py-1 font-mono text-[9px] uppercase tracking-wider text-white/45 backdrop-blur"
+            >
+              my video
+            </button>
+          )}
+        </>
+      ) : avatarEnabled && !characterFailed ? (
         <div className="absolute inset-0">
           <MyraaCoreVisualizer
             session={session}
@@ -98,7 +147,7 @@ export function MobileStage({ session, state, theme, emotion, characterState, re
       )}
 
       {/* Quiet hint when the character is not present, without blocking the stage. */}
-      {avatarEnabled && !characterFailed && (
+      {!clip && avatarEnabled && !characterFailed && (
         <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
           <span className="rounded-full bg-black/25 px-3 py-1 font-mono text-[9px] uppercase tracking-[0.25em] text-white/25 backdrop-blur-sm">
             {active ? "presence link active" : "tap the mic to wake her"}

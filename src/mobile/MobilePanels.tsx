@@ -21,7 +21,7 @@ import type { MobilePrefs } from "./mobilePrefs";
 
 export type MobileSheet =
   | "history" | "missions" | "memory" | "device" | "settings" | "help"
-  | "briefing" | "automations" | "vision" | "persona" | "stop" | "selfcheck" | "calls" | "messages" | "activity"
+  | "briefing" | "automations" | "vision" | "persona" | "stop" | "selfcheck" | "calls" | "messages" | "activity" | "look"
   | null;
 
 const TASK_LABEL: Record<TaskView["state"], string> = {
@@ -722,6 +722,7 @@ export const SHEET_TITLES: Record<Exclude<MobileSheet, null>, string> = {
   calls: "Calls",
   messages: "Messages",
   activity: "Activity",
+  look: "Companion look",
 };
 
 export const SHEET_ICONS = { history: History, missions: Activity, memory: Brain, device: Wifi, settings: SettingsIcon, help: ShieldQuestion, close: X };

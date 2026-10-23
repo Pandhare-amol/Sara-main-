@@ -9,14 +9,16 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Activity, Brain, CalendarClock, Camera, History, Loader2, Menu, MessageCircleHeart, MessageSquare, Mic, MicOff,
-  OctagonX, Phone, Send, Settings as SettingsIcon, ShieldQuestion, Square, Wifi, WifiOff, X,
+  Film, OctagonX, Phone, Send, Settings as SettingsIcon, ShieldQuestion, Square, Wifi, WifiOff, X,
 } from "lucide-react";
 import { useAppEvents } from "../lib/useAppEvents";
 import { detectEmotionFromText } from "../lib/emotion";
 import { getServerConfig, isNativeApp, saraJson } from "../lib/serverConfig";
 import { useMobileSession } from "./useMobileSession";
 import { useMobilePrefs, useKeyboardInset } from "./mobilePrefs";
-import { MobileStage, accentFor } from "./MobileStage";
+import { MobileStage, accentFor, type StageClip } from "./MobileStage";
+import { CompanionLookPanel } from "./CompanionLookPanel";
+import { clearVideo, loadVideoBlob, loadVideoMeta, saveVideoFile, type VideoAsset } from "./videoStage";
 import { DevicePanel, HelpPanel, HistoryPanel, MemoryPanel, MissionsPanel, SettingsPanel, type MobileSheet } from "./MobilePanels";
 import {
   ActivityPanel, AutomationsPanel, BriefingPanel, CallsPanel, DiagnosticsPanel, MessagesPanel, PersonaPanel, StopPanel, VisionPanel,
@@ -59,8 +61,71 @@ export function MobileApp() {
   const [notice, setNotice] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [serverOnline, setServerOnline] = useState<boolean | null>(null);
+  const [clipAsset, setClipAsset] = useState<VideoAsset | null>(null);
+  const [clipUrl, setClipUrl] = useState<string | null>(null);
+  const [clipFailed, setClipFailed] = useState(false);
+  const [clipBusy, setClipBusy] = useState(false);
+  const clipUrlRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const accent = accentFor(theme);
+
+  // A video the user uploaded earlier is restored before the first paint of the
+  // stage, so a saved clip really is what she stands in after the app starts.
+  useEffect(() => {
+    let cancelled = false;
+    let created: string | null = null;
+    (async () => {
+      const meta = await loadVideoMeta();
+      if (cancelled) return;
+      setClipAsset(meta);
+      if (!meta) return;
+      const blob = await loadVideoBlob();
+      if (cancelled || !blob) return;
+      created = URL.createObjectURL(blob);
+      clipUrlRef.current = created;
+      setClipUrl(created);
+    })();
+    return () => {
+      cancelled = true;
+      if (created) URL.revokeObjectURL(created);
+      if (clipUrlRef.current === created) clipUrlRef.current = null;
+    };
+  }, []);
+
+  function replaceClip(asset: VideoAsset | null, blob: Blob | null) {
+    // Revoke outside the state updater: React may invoke updaters twice in
+    // development, which would otherwise leak one object URL per replace.
+    const previous = clipUrlRef.current;
+    const next = blob ? URL.createObjectURL(blob) : null;
+    clipUrlRef.current = next;
+    setClipUrl(next);
+    setClipAsset(asset);
+    setClipFailed(false);
+    if (previous) URL.revokeObjectURL(previous);
+  }
+
+  async function uploadClip(file: File) {
+    setClipBusy(true);
+    try {
+      const asset = await saveVideoFile(file);
+      const blob = await loadVideoBlob();
+      replaceClip(asset, blob);
+      updatePrefs({ stageMode: "video" });
+    } finally {
+      setClipBusy(false);
+    }
+  }
+
+  async function removeClip() {
+    setClipBusy(true);
+    try {
+      await clearVideo();
+      replaceClip(null, null);
+      updatePrefs({ stageMode: "character" });
+    } finally {
+      setClipBusy(false);
+    }
+  }
 
   // Native chrome: status bar colours and the Android back button.
   useEffect(() => installNativeShell(), []);
@@ -110,6 +175,16 @@ export function MobileApp() {
   const emotion = useMemo(() => (caption ? detectEmotionFromText(caption) : "idle"), [caption]);
   const characterState = session.state === "speaking" ? "talking" : session.state === "connecting" || (session.userCaption && !session.saraCaption) ? "thinking" : "idle";
   const micBlocked = session.micStatus === "denied" || session.micStatus === "unsupported";
+  const stageClip: StageClip | null =
+    prefs.stageMode === "video" && clipUrl && !clipFailed
+      ? {
+          url: clipUrl,
+          poster: clipAsset?.poster ?? null,
+          muted: !prefs.videoSound,
+          fit: prefs.videoFit,
+          paused: prefs.reducedMotion,
+        }
+      : null;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -170,6 +245,14 @@ export function MobileApp() {
           </span>
           <button
             type="button"
+            onClick={() => setSheet("look")}
+            aria-label="Companion look"
+            className="rounded-xl border border-white/10 bg-white/[0.04] p-2 text-white/60 transition active:scale-95"
+          >
+            <Film size={18} />
+          </button>
+          <button
+            type="button"
             onClick={() => setShowMenu((open) => !open)}
             aria-label={showMenu ? "Close menu" : "Open menu"}
             aria-expanded={showMenu}
@@ -210,6 +293,12 @@ export function MobileApp() {
         characterState={characterState}
         reducedMotion={prefs.reducedMotion}
         avatarEnabled={prefs.avatarEnabled}
+        clip={stageClip}
+        onClipError={(message) => {
+          setClipFailed(true);
+          setNotice(`${message} She is back on the 3D stage — try another clip.`);
+        }}
+        onOpenLook={() => setSheet("look")}
       />
 
       {/* Captions / state */}
@@ -370,6 +459,7 @@ export function MobileApp() {
               ["memory", Brain, "Memory"],
               ["calls", Phone, "Calls"],
               ["messages", MessageSquare, "Messages"],
+              ["look", Film, "Companion look"],
               ["vision", Camera, "Look at this"],
               ["persona", MessageCircleHeart, "How she talks"],
               ["device", Wifi, "Connection"],
@@ -423,6 +513,17 @@ export function MobileApp() {
       {sheet === "briefing" && <BriefingPanel onClose={() => setSheet(null)} onOpenMissions={() => setSheet("missions")} />}
       {sheet === "automations" && <AutomationsPanel onClose={() => setSheet(null)} />}
       {sheet === "vision" && <VisionPanel onClose={() => setSheet(null)} />}
+      {sheet === "look" && (
+        <CompanionLookPanel
+          asset={clipAsset}
+          prefs={prefs}
+          busy={clipBusy}
+          onUpload={uploadClip}
+          onRemove={removeClip}
+          onChangePrefs={updatePrefs}
+          onClose={() => setSheet(null)}
+        />
+      )}
       {sheet === "persona" && <PersonaPanel onClose={() => setSheet(null)} />}
       {sheet === "stop" && <StopPanel onClose={() => setSheet(null)} onStopped={setNotice} />}
       {sheet === "selfcheck" && <DiagnosticsPanel onClose={() => setSheet(null)} />}
