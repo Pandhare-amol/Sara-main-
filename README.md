@@ -57,7 +57,22 @@ you share.
 `npm run dist` (electron-builder.yml) expects a character in `assets/characters/`, which is not
 included; use `dist:public`.
 
-## Sara on your phone (web + Android)
+## Two ways to have Sara on your phone
+
+| | **Sara Mobile** — standalone | **Sara** — client of your PC |
+| --- | --- | --- |
+| Release | [apk-mobile-latest](https://github.com/Pandhare-amol/Sara-main-/releases/tag/mobile-apk-latest) | [apk-latest](https://github.com/Pandhare-amol/Sara-main-/releases/tag/apk-latest) |
+| Package | `ai.sara.mobile` | `ai.sara.companion` |
+| Brain | on the phone (your AI key, direct to Google) | on the PC (`npm run phone`) |
+| Needs the PC on | no | yes |
+| Shares memory or settings with the PC | no | yes (it is the same Sara) |
+| PC control, WhatsApp, screen capture | not included | included |
+
+Both install side by side. **Sara Mobile** is the one to use when the laptop is
+off; read [docs/SARA_MOBILE.md](docs/SARA_MOBILE.md) for install steps, what it
+does, what it honestly cannot do, and where its data lives.
+
+## Sara as a client of your PC (web + Android)
 
 The phone is another client of the **same** backend, memory, tools and policy —
 not a second Sara. Every PC feature is reachable there or says why it is not
