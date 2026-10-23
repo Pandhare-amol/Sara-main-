@@ -37,5 +37,18 @@ const config = {
 };
 fs.writeFileSync(path.join(assets, "capacitor.config.json"), JSON.stringify(config, null, 2));
 
+/**
+ * The copied Gradle project expects Capacitor's generated plugin file. Capacitor
+ * only regenerates it via `cap sync`, which targets the `android/` folder, so the
+ * standalone project keeps its own checked-in copy — and it must not reference
+ * the Cordova module (this app ships none).
+ */
+const generated = path.join(root, "android-mobile", "app", "capacitor.build.gradle");
+const pluginFile = fs.readFileSync(generated, "utf8");
+if (pluginFile.includes("capacitor-cordova-android-plugins")) {
+  console.error("[mobile-sync] android-mobile/app/capacitor.build.gradle references the missing Cordova module.");
+  process.exit(1);
+}
+
 const files = fs.readdirSync(to);
 console.log(`[mobile-sync] copied ${files.length} entries into android-mobile/app/src/main/assets/public`);
