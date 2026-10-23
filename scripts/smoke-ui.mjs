@@ -38,6 +38,8 @@ const define = {
 const suites = [
   { name: "mobile shell", entry: "scripts/smoke-mobile-entry.tsx", preload: "scripts/smoke-jsdom-preload.cjs" },
   { name: "desktop shell", entry: "scripts/smoke-desktop-entry.tsx", preload: "scripts/desk-smoke-preload.cjs" },
+  // The standalone phone app: its own bundle, no server, no network.
+  { name: "standalone mobile app", entry: "scripts/smoke-standalone-entry.tsx", preload: "scripts/standalone-smoke-preload.cjs" },
 ];
 
 let failed = false;

@@ -1,0 +1,8 @@
+// Separate Gradle project for the standalone Sara Mobile app.
+// It shares the Capacitor setup with the desktop client app but builds a
+// different applicationId, so both can be installed side by side.
+include ':app'
+include ':capacitor-cordova-android-plugins'
+project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
+
+apply from: 'capacitor.settings.gradle'

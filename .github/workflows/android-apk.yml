@@ -66,7 +66,7 @@ jobs:
       - name: TypeScript checks
         run: npm run lint
 
-      - name: Unit tests (agent, characters, remote access, mobile, persona, calls, capabilities, operations)
+      - name: Unit tests (agent, characters, remote access, mobile, persona, calls, capabilities, operations, standalone)
         run: |
           npm run test:agent
           npm run test:characters
@@ -76,8 +76,9 @@ jobs:
           npm run test:calls
           npm run test:capabilities
           npm run test:operations
+          npm run test:standalone
 
-      - name: UI smoke tests (phone shell + desktop shell)
+      - name: UI smoke tests (phone shell, desktop shell, standalone app)
         run: npm run test:ui
 
       - name: Production web build
@@ -94,6 +95,9 @@ jobs:
           test -d dist/assets
           echo "Built files: $(find dist -type f | wc -l)"
           echo "Bundle size: $(du -sh dist | cut -f1)"
+
+      - name: Build the standalone Sara Mobile bundle
+        run: npm run build:mobile
 
       - name: Upload web build (for deployment or inspection)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -268,6 +272,149 @@ jobs:
             if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
               echo "- Debug APK: $(du -h android/app/build/outputs/apk/debug/app-debug.apk | cut -f1) — artifact **sara-debug-apk**"
               echo "- Install: enable \"install unknown apps\", copy the APK to the phone, tap to install."
+            else
+              echo "- **The APK was not produced — check the Gradle log above.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  mobile-apk:
+    name: Build Sara Mobile APK (standalone)
+    needs: web-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies from the lockfile
+        run: npm ci --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Set up Java 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Configure the preinstalled Android SDK
+        run: |
+          set -eu
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK" ]; then
+            echo "::error::No Android SDK at $SDK"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Install the Android platform and build tools
+        run: |
+          set -eu
+          SDKMANAGER="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      # Builds dist-mobile, refuses to continue if the standalone bundle picked
+      # up a server dependency, then copies the assets into android-mobile.
+      - name: Build and sync the standalone app
+        run: npm run mobile:sync
+
+      - name: Verify no credentials reached the bundle
+        run: npm run check:bundle-secrets
+
+      - name: Confirm the app bundles local assets with its own identity
+        run: |
+          set -eu
+          CONFIG=android-mobile/app/src/main/assets/capacitor.config.json
+          test -f "$CONFIG"
+          test -f android-mobile/app/src/main/assets/public/index.html
+          grep -q '"appId": "ai.sara.mobile"' "$CONFIG"
+          if grep -Eq '"url"[[:space:]]*:' "$CONFIG"; then
+            echo "::error::capacitor.config.json points at a dev server."
+            exit 1
+          fi
+          grep -q 'applicationId "ai.sara.mobile"' android-mobile/app/build.gradle
+          grep -q 'Sara Mobile' android-mobile/app/src/main/res/values/strings.xml
+          echo "Standalone project identity verified."
+          cat "$CONFIG"
+
+      - name: Build the standalone debug APK
+        working-directory: android-mobile
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Verify the APK is installable and is the mobile app
+        run: |
+          set -eu
+          APK=android-mobile/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK" || { echo "::error::Sara Mobile APK was not produced."; exit 1; }
+          SIZE=$(stat -c%s "$APK")
+          echo "APK size: $SIZE bytes"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::APK is suspiciously small ($SIZE bytes)."
+            exit 1
+          fi
+          unzip -l "$APK" | grep -q "AndroidManifest.xml"
+          unzip -l "$APK" | grep -q "classes.dex"
+          unzip -l "$APK" | grep -q "assets/public/index.html"
+
+          AAPT=$(ls "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/aapt2 2>/dev/null | tail -1 || true)
+          if [ -n "${AAPT:-}" ]; then
+            "$AAPT" dump badging "$APK" | head -3
+            "$AAPT" dump badging "$APK" | grep -q "package: name='ai.sara.mobile'" || {
+              echo "::error::The APK is not the separate Sara Mobile app."
+              exit 1
+            }
+            "$AAPT" dump badging "$APK" | grep -q "application-label:'Sara Mobile'" || {
+              echo "::error::The APK is not labelled Sara Mobile."
+              exit 1
+            }
+          fi
+          echo "Sara Mobile APK verified."
+
+      - name: Upload the standalone APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sara-mobile-apk
+          path: android-mobile/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish the standalone APK to its own rolling prerelease
+        if: github.event_name == 'push' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view mobile-apk-latest >/dev/null 2>&1 || \
+            gh release create mobile-apk-latest \
+              --title "Sara Mobile (standalone) test APK" \
+              --notes "Standalone Sara Mobile — runs on the phone with your own AI key. Separate app from the PC client." \
+              --prerelease
+          cp android-mobile/app/build/outputs/apk/debug/app-debug.apk "sara-mobile-${GITHUB_SHA::7}.apk"
+          gh release upload mobile-apk-latest "sara-mobile-${GITHUB_SHA::7}.apk" --clobber
+          echo "Sara Mobile APK: https://github.com/${GITHUB_REPOSITORY}/releases/tag/mobile-apk-latest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write build summary
+        if: always()
+        run: |
+          {
+            echo "## Sara Mobile (standalone) APK"
+            echo ""
+            echo "- Package: \`ai.sara.mobile\` (separate from \`ai.sara.companion\`)"
+            echo "- Runs on the phone with the user's own AI key; no Sara server involved."
+            if [ -f android-mobile/app/build/outputs/apk/debug/app-debug.apk ]; then
+              echo "- Debug APK: $(du -h android-mobile/app/build/outputs/apk/debug/app-debug.apk | cut -f1) — artifact **sara-mobile-apk**"
             else
               echo "- **The APK was not produced — check the Gradle log above.**"
             fi

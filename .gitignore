@@ -38,3 +38,10 @@ keystore.properties
 
 # Phone access token created by scripts/start-phone-server.mjs
 .sara-phone.json
+
+# Standalone Sara Mobile Android project (generated web assets)
+android-mobile/.gradle/
+android-mobile/local.properties
+android-mobile/app/build/
+android-mobile/app/src/main/assets/public/
+android-mobile/app/src/main/assets/capacitor.config.json
