@@ -6,6 +6,7 @@
  * (the app and the desktop companion) each pay it, so low-end PCs need all
  * three turned down. "auto" picks low on integrated / low-memory machines.
  */
+import { saraFetch } from "../../lib/serverConfig";
 import * as THREE from 'three';
 import type { CharacterConfig } from '../config/types';
 
@@ -76,12 +77,12 @@ export function qualityProfile(quality: GraphicsQuality | undefined | null, auto
 
 /** Auto quality: step one level down for next time (after a crash or lost GPU context). */
 export function reportGraphicsTrouble(): void {
-  void fetch('/api/app-settings')
+  void saraFetch('/api/app-settings')
     .then((r) => (r.ok ? r.json() : null))
     .then((s) => {
       if (!s || (s.graphics?.quality ?? 'auto') !== 'auto') return;
       const step = Math.min(3, (Number(s.graphics?.autoStep) || 0) + 1);
-      return fetch('/api/app-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ graphics: { autoStep: step } }) });
+      return saraFetch('/api/app-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ graphics: { autoStep: step } }) });
     })
     .catch(() => undefined);
 }

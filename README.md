@@ -57,6 +57,38 @@ you share.
 `npm run dist` (electron-builder.yml) expects a character in `assets/characters/`, which is not
 included; use `dist:public`.
 
+## Sara on your phone (web + Android)
+
+Sara has a phone interface that talks to the **same** backend, memory and tools:
+
+- **Mobile web app** — open the deployed site (or `http://localhost:3000` on a
+  narrow screen). It shows the avatar, one microphone button, a text composer
+  and a compact menu (conversation, missions, memory, connection, settings,
+  help).
+- **Android APK** — Capacitor 7 package of the same web build. It is compiled by
+  GitHub Actions, so no Android Studio is needed on your laptop. See
+  [docs/ANDROID.md](docs/ANDROID.md).
+
+The phone reaches Sara over HTTPS. Local-only mode is unchanged and is still the
+default; to allow a phone, start the server like this:
+
+```bash
+export SARA_REMOTE_ACCESS=1
+export SARA_ACCESS_TOKEN="$(openssl rand -hex 32)"
+export SARA_ALLOWED_ORIGINS="https://your-web-app.vercel.app"
+npm run dev
+# expose http://localhost:3000 with cloudflared/nginx (HTTPS + WebSockets)
+```
+
+Then, on the phone, enter that HTTPS address and the token in **Connect to Sara**.
+
+More: [docs/MOBILE.md](docs/MOBILE.md) · [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) ·
+[docs/MOBILE_TEST_REPORT.md](docs/MOBILE_TEST_REPORT.md).
+
+Phone limitations are stated in the app's Help screen: camera vision is not
+implemented, screen vision and character import stay on the desktop, and PC
+automation from a phone is opt-in (`SARA_REMOTE_ALLOW_DESKTOP=1`).
+
 ## Project map
 
 | Folder | What it is |
@@ -71,6 +103,24 @@ included; use `dist:public`.
 | `settings/`, `permissions/`, `secrets/` | Settings, permission engine, DPAPI key store |
 | `character_import/` | PMX importer and capability report |
 | `cognition/`, `memory/`, `presence/` | Memory, initiative and presence |
+| `src/mobile/`, `server_remoteAccess.ts` | Phone shell and the opt-in remote-access layer |
+| `android/`, `capacitor.config.ts` | Capacitor Android project (built in CI) |
+| `scripts/android-assets.sh` | Regenerates launcher icons and splash screens |
+| `public/`, `vercel.json`, `netlify.toml` | PWA assets and static deployment config |
+
+## Tests
+
+```bash
+npm run lint
+npm run test:agent
+npm run test:characters
+npm run test:remote-access
+npm run test:mobile
+npm run check:bundle-secrets   # after `npm run build:web`
+```
+
+`npm test` also runs the Python desktop-agent tests, which need Windows and
+`desktop_agent/requirements.txt`.
 
 ## Graphics quality
 

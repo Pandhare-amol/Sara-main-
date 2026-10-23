@@ -1,0 +1,325 @@
+# Build Sara's Android APK on a GitHub-hosted runner.
+#
+# No Android Studio is required on any laptop: this workflow installs Node,
+# Java and the Android SDK, builds the web app, syncs Capacitor and compiles
+# the APK. The APK is uploaded as a downloadable artifact.
+#
+# Triggers:
+#   - manual (Actions → "Android APK" → Run workflow)
+#   - pushes that touch the app, the Android project or this workflow
+#   - tags starting with v (e.g. v1.5.2)
+name: Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "APK type"
+        type: choice
+        options: [debug, release]
+        default: debug
+      build_release_signing:
+        description: "Also build a signed release (requires signing secrets)"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "android/**"
+      - "capacitor.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - "index.html"
+      - "public/**"
+      - ".github/workflows/android-apk.yml"
+  tags:
+    - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-checks:
+    name: Web build, types and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies from the lockfile
+        run: npm ci --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: TypeScript checks
+        run: npm run lint
+
+      - name: Unit tests (agent, characters, remote access, mobile)
+        run: |
+          npm run test:agent
+          npm run test:characters
+          npm run test:remote-access
+          npm run test:mobile
+
+      - name: Production web build
+        run: npm run build:web
+
+      - name: Verify no credentials reached the bundle
+        run: npm run check:bundle-secrets
+
+      - name: Verify the build output is deployable
+        run: |
+          set -eu
+          test -f dist/index.html
+          test -f dist/manifest.webmanifest
+          test -d dist/assets
+          echo "Built files: $(find dist -type f | wc -l)"
+          echo "Bundle size: $(du -sh dist | cut -f1)"
+
+      - name: Upload web build (for deployment or inspection)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sara-web-build
+          path: dist
+          retention-days: 14
+          if-no-files-found: error
+
+  apk:
+    name: Build APK
+    needs: web-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies from the lockfile
+        run: npm ci --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install the Android platform and build tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Build the web app for the APK
+        run: npm run build:web
+
+      - name: Verify no credentials reached the bundle
+        run: npm run check:bundle-secrets
+
+      - name: Sync Capacitor (copies dist into the Android project)
+        run: npx cap sync android
+
+      - name: Confirm the APK bundles local assets, not a dev server
+        run: |
+          set -eu
+          CONFIG=android/app/src/main/assets/capacitor.config.json
+          test -f "$CONFIG"
+          if grep -Eq '"url"[[:space:]]*:' "$CONFIG"; then
+            echo "::error::capacitor.config.json contains a server URL; release APKs must bundle local assets."
+            exit 1
+          fi
+          test -f android/app/src/main/assets/public/index.html
+          grep -q '"cleartext": false' "$CONFIG"
+          echo "Capacitor config OK:"
+          cat "$CONFIG"
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Verify the debug APK exists and is installable
+        run: |
+          set -eu
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK" || { echo "::error::Debug APK was not produced."; exit 1; }
+          SIZE=$(stat -c%s "$APK")
+          echo "APK size: $SIZE bytes"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::APK is suspiciously small ($SIZE bytes)."
+            exit 1
+          fi
+          unzip -l "$APK" | head -20
+          unzip -l "$APK" | grep -q "AndroidManifest.xml"
+          unzip -l "$APK" | grep -q "classes.dex"
+          unzip -l "$APK" | grep -q "assets/public/index.html"
+          echo "APK contents verified."
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sara-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Write build summary
+        if: always()
+        run: |
+          {
+            echo "## Android APK build"
+            echo ""
+            echo "- Package: \`ai.sara.companion\`"
+            echo "- Runner: ${{ runner.os }} / JDK 21 / Android 35"
+            if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
+              echo "- Debug APK: $(du -h android/app/build/outputs/apk/debug/app-debug.apk | cut -f1) — artifact **sara-debug-apk**"
+              echo "- Install: enable \"install unknown apps\", copy the APK to the phone, tap to install."
+            else
+              echo "- **The APK was not produced — check the Gradle log above.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Signed release APK (optional)
+    needs: web-checks
+    if: |
+      (github.event_name == 'workflow_dispatch' && (inputs.build_type == 'release' || inputs.build_release_signing)) ||
+      startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SARA_KEYSTORE_FILE: ${{ secrets.SARA_KEYSTORE_FILE }}
+      SARA_KEYSTORE_PASSWORD: ${{ secrets.SARA_KEYSTORE_PASSWORD }}
+      SARA_KEY_ALIAS: ${{ secrets.SARA_KEY_ALIAS }}
+      SARA_KEY_PASSWORD: ${{ secrets.SARA_KEY_PASSWORD }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Check signing configuration
+        id: signing
+        run: |
+          if [ -z "${SARA_KEYSTORE_FILE:-}" ] || [ -z "${SARA_KEYSTORE_PASSWORD:-}" ] || [ -z "${SARA_KEY_ALIAS:-}" ] || [ -z "${SARA_KEY_PASSWORD:-}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets are not configured; only the debug APK will be produced."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets detected."
+          fi
+
+      - name: Set up Node.js
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.signing.outputs.configured == 'true'
+        run: npm ci --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Set up Java 21
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up the Android SDK
+        if: steps.signing.outputs.configured == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Install the Android platform and build tools
+        if: steps.signing.outputs.configured == 'true'
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Decode the keystore
+        if: steps.signing.outputs.configured == 'true'
+        run: |
+          set -eu
+          FILE="$RUNNER_TEMP/sara-release.keystore"
+          printf '%s' "$SARA_KEYSTORE_FILE" | base64 --decode > "$FILE"
+          test -s "$FILE" || { echo "::error::Decoded keystore is empty."; exit 1; }
+          echo "SARA_KEYSTORE_FILE=$FILE" >> "$GITHUB_ENV"
+          echo "Keystore decoded to a temporary path (contents never printed)."
+
+      - name: Build the web app and sync Capacitor
+        if: steps.signing.outputs.configured == 'true'
+        run: |
+          npm run build:web
+          npm run check:bundle-secrets
+          npx cap sync android
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.configured == 'true'
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleRelease
+
+      - name: Verify the signed APK
+        if: steps.signing.outputs.configured == 'true'
+        run: |
+          set -eu
+          APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          test -n "$APK" || { echo "::error::No release APK produced."; exit 1; }
+          echo "Release APK: $APK ($(stat -c%s "$APK") bytes)"
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" > /tmp/apksigner.txt || {
+            echo "::error::Release APK is not signed."
+            exit 1
+          }
+          grep -E "Signer #1 certificate DN|Signer #1 certificate SHA-256 digest" /tmp/apksigner.txt
+          unzip -l "$APK" | grep -q "assets/public/index.html"
+          echo "RELEASE_APK=$APK" >> "$GITHUB_ENV"
+
+      - name: Upload signed release APK
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sara-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Explain why no release APK was built
+        if: steps.signing.outputs.configured != 'true'
+        run: |
+          {
+            echo "## Signed release APK skipped"
+            echo ""
+            echo "Add these repository secrets to enable signed release builds:"
+            echo ""
+            echo "- \`SARA_KEYSTORE_FILE\` — base64 of your .keystore"
+            echo "- \`SARA_KEYSTORE_PASSWORD\`"
+            echo "- \`SARA_KEY_ALIAS\`"
+            echo "- \`SARA_KEY_PASSWORD\`"
+            echo ""
+            echo "Until then, use the debug APK from the **apk** job (installable, but not publishable)."
+          } >> "$GITHUB_STEP_SUMMARY"

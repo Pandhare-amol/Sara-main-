@@ -135,6 +135,11 @@ test("legacy permission flags migrate to capability denials", () => {
 });
 
 test("confirmation broker resolves once, expires and cancels with the task", async () => {
+  // The broker intentionally unrefs its expiry timer so a pending confirmation
+  // never keeps the app alive. A test process has no other work to keep the
+  // event loop open, so hold it here or the awaited timeout never fires.
+  const keepAlive = setTimeout(() => {}, 5_000);
+  try {
   const broker = new ConfirmationBroker();
   const { request, answer } = broker.request({
     taskId: "t1", capability: "SEND_MESSAGE", title: "Send?", description: "Send IMG_1.png to Papa", details: {}, allowRemember: false,
@@ -151,6 +156,9 @@ test("confirmation broker resolves once, expires and cancels with the task", asy
   const cancelled = broker.request({ taskId: "t3", capability: "RUN_COMMAND", title: "", description: "", details: {}, allowRemember: false }, { signal: controller.signal });
   controller.abort();
   assert.equal((await cancelled.answer).via, "cancel");
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });
 
 test("redaction removes secrets from text and structured data", () => {

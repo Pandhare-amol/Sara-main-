@@ -23,3 +23,15 @@ assets/.aistudio/
 assets/*.mp4
 .env*
 !.env.example
+!.env.mobile.example
+
+# Android build outputs and local signing material
+android/.gradle/
+android/local.properties
+android/app/build/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+keystore.properties
+*.keystore
+*.jks

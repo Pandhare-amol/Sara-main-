@@ -1,7 +1,7 @@
 {
   "name": "sara",
   "productName": "Sara",
-  "description": "Sara — a private 3D AI desktop companion powered by each user's own Gemini API key.",
+  "description": "Sara \u2014 a private 3D AI desktop companion powered by each user's own Gemini API key.",
   "author": "Sara",
   "private": true,
   "version": "1.5.2",
@@ -27,10 +27,22 @@
     "build:launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-launcher.ps1",
     "test:characters": "node --import tsx --test tests/characters.test.ts",
     "test:agent": "node --import tsx --test tests/core.test.ts tests/models.test.ts tests/agentLoop.test.ts tests/presence.test.ts tests/chatOpen.test.ts",
-    "test": "npm run lint && npm run test:agent && npm run test:characters && npm run test:python",
-    "import:character": "tsx tools/import-character.ts"
+    "test": "npm run lint && npm run test:agent && npm run test:characters && npm run test:python && npm run test:remote-access",
+    "import:character": "tsx tools/import-character.ts",
+    "build:web": "vite build",
+    "cap:sync": "npm run build:web && cap sync android",
+    "cap:open": "cap open android",
+    "android:debug": "npm run cap:sync && cd android && ./gradlew assembleDebug",
+    "android:release": "npm run cap:sync && cd android && ./gradlew assembleRelease",
+    "test:mobile": "node --import tsx --test tests/mobile.test.ts",
+    "test:remote-access": "node --import tsx --test tests/remoteAccess.test.ts",
+    "check:bundle-secrets": "node scripts/check-bundle-secrets.mjs"
   },
   "dependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/core": "^7.6.9",
+    "@capacitor/status-bar": "^7.0.6",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
@@ -47,6 +59,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.6.9",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/three": "^0.185.1",

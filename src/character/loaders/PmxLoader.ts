@@ -56,10 +56,16 @@ export interface LoadPmxOptions {
 const RIGID_BODY_TYPES: PmxRigidBodyType[] = ['kinematic', 'dynamic', 'dynamicBonePosition'];
 const SHAPES = ['sphere', 'box', 'capsule'] as const;
 
-/** Resolve `relative` against the directory containing `baseUrl`. */
+/**
+ * Resolve `relative` against the directory containing `baseUrl`, keeping any
+ * query string (remote servers put the access token there).
+ */
 function resolveFrom(baseUrl: string, relative: string): string {
-  const dir = baseUrl.slice(0, baseUrl.lastIndexOf('/') + 1);
-  return dir + relative.split(/[\\/]/).map(encodeURIComponent).join('/');
+  const queryIndex = baseUrl.indexOf('?');
+  const query = queryIndex >= 0 ? baseUrl.slice(queryIndex) : '';
+  const clean = queryIndex >= 0 ? baseUrl.slice(0, queryIndex) : baseUrl;
+  const dir = clean.slice(0, clean.lastIndexOf('/') + 1);
+  return dir + relative.split(/[\\/]/).map(encodeURIComponent).join('/') + query;
 }
 
 /**

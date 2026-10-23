@@ -6,6 +6,7 @@
  * per-frame data is pushed through a ref into the running loop rather than
  * through React state, so the animation never depends on React's scheduler.
  */
+import { saraFetch } from "../lib/serverConfig";
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles, TriangleAlert } from 'lucide-react';
 import { CharacterSystem } from './core/CharacterSystem';
@@ -43,6 +44,12 @@ export interface MyraaCharacterProps {
   unloadWhenHidden?: boolean;
   /** Main screen only: in Potato mode with the desktop companion on, skip this copy. */
   desktopOnlyWhenPotato?: boolean;
+  /**
+   * What to show when the user has not imported a 3D model yet.
+   * `import` (default) offers the desktop import flow; `quiet` renders nothing
+   * so a host (e.g. the phone shell) can show its own, honest placeholder.
+   */
+  emptyState?: 'import' | 'quiet';
 }
 
 /** Apply the renderer-relevant part of the server settings to a system. */
@@ -76,10 +83,10 @@ const ImportFirstCharacter: React.FC = () => {
     setBusy(true);
     setMessage('Importing your character… this can take a minute.');
     try {
-      const response = await fetch('/api/characters/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source }) });
+      const response = await saraFetch('/api/characters/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result?.error || `Import failed (${response.status}).`);
-      await fetch('/api/app-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ character: { activeCharacterId: result.profile.id } }) });
+      await saraFetch('/api/app-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ character: { activeCharacterId: result.profile.id } }) });
       window.location.reload();
     } catch (error) {
       setBusy(false);
@@ -126,6 +133,7 @@ export const MyraaCharacter: React.FC<MyraaCharacterProps> = ({
   clothInteraction = true,
   unloadWhenHidden = true,
   desktopOnlyWhenPotato = false,
+  emptyState = 'import',
 }) => {
   const onSystemRef = useRef(onSystem);
   onSystemRef.current = onSystem;
@@ -198,7 +206,7 @@ export const MyraaCharacter: React.FC<MyraaCharacterProps> = ({
 
     // Settings first: graphics quality decides resolution, anti-aliasing and
     // shadow size, which are fixed when the GPU context is created.
-    const settingsReady = fetch('/api/app-settings')
+    const settingsReady = saraFetch('/api/app-settings')
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
     Promise.all([resolveCharacter(characterId), settingsReady])
@@ -568,7 +576,7 @@ export const MyraaCharacter: React.FC<MyraaCharacterProps> = ({
         </div>
       )}
 
-      {load.error === NO_CHARACTER && <ImportFirstCharacter />}
+      {load.error === NO_CHARACTER && emptyState === 'import' && <ImportFirstCharacter />}
 
       {load.error === DESKTOP_ONLY && (
         <div className="pointer-events-none absolute inset-x-0 top-[22%] flex justify-center p-4">

@@ -8,6 +8,7 @@
  *    permission policy (/api/permissions), which the agent enforces.
  * Only settings that the app actually honours are shown here.
  */
+import { saraFetch } from "../lib/serverConfig";
 import React, { useEffect, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -152,7 +153,7 @@ function GeminiKeyBox() {
 
   // The backend reports only whether a key exists; it never returns the secret.
   useEffect(() => {
-    void fetch("/api/config", { cache: "no-store" }).then((r) => r.json()).then((d) => setConfigured(Boolean(d.hasApiKey))).catch(() => setConfigured(false));
+    void saraFetch("/api/config", { cache: "no-store" }).then((r) => r.json()).then((d) => setConfigured(Boolean(d.hasApiKey))).catch(() => setConfigured(false));
   }, []);
 
   const save = async () => {
@@ -161,7 +162,7 @@ function GeminiKeyBox() {
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/config/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiKey }) });
+      const res = await saraFetch("/api/config/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiKey }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "The API key could not be saved.");
       setConfigured(true);
@@ -363,7 +364,7 @@ function SystemSection({ app, patch, onRestartOnboarding }: { app: AppSettings; 
   useEffect(() => {
     const probe = async () => {
       try {
-        const res = await fetch("/api/agent-health", { cache: "no-store" });
+        const res = await saraFetch("/api/agent-health", { cache: "no-store" });
         const data = res.ok ? await res.json() : null;
         setAgent({ online: Boolean(data?.online), toolCount: data?.tool_count });
       } catch {
@@ -466,7 +467,7 @@ export function SettingsPanel({ isOpen, onClose, settings, onChange, appSettings
                       <ToggleRow label="Launch at Windows startup" description="Start Sara quietly when you log in." checked={settings.autoStart}
                         onChange={(v) => {
                           onChange({ autoStart: v });
-                          void fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoStart: v }) }).catch(() => {});
+                          void saraFetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoStart: v }) }).catch(() => {});
                         }} />
                       <ToggleRow label="Animations" description="Motion and transitions in the interface." checked={settings.animations} onChange={(v) => onChange({ animations: v })} />
                     </Group>

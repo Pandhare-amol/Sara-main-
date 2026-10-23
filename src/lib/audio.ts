@@ -1,3 +1,4 @@
+import { saraFetch, wsUrl } from "./serverConfig";
 /**
  * Audio handling utility for Myraa Live API Voice stream.
  * Handles:
@@ -185,7 +186,8 @@ export class MyraaAudioSession {
   private onError: (error: string) => void;
   private onMemorySync?: (memories: any[]) => void;
   private onScreenVisionState?: (state: "idle" | "capturing" | "ready" | "error", info: { activeWindow?: string | null; error?: string | null }) => void;
-  
+  private onTurnComplete?: (role: "user" | "model") => void;
+
   private currentState: LiveState = "disconnected";
   private isActivated = false;
   private useMicrophone = true;
@@ -200,6 +202,8 @@ export class MyraaAudioSession {
     onError: (error: string) => void;
     onMemorySync?: (memories: any[]) => void;
     onScreenVisionState?: (state: "idle" | "capturing" | "ready" | "error", info: { activeWindow?: string | null; error?: string | null }) => void;
+    /** Optional: fired when the model finishes a turn (used by the mobile log). */
+    onTurnComplete?: (role: "user" | "model") => void;
   }) {
     this.onStateChange = handlers.onStateChange;
     this.onTranscription = handlers.onTranscription;
@@ -207,6 +211,7 @@ export class MyraaAudioSession {
     this.onError = handlers.onError;
     this.onMemorySync = handlers.onMemorySync;
     this.onScreenVisionState = handlers.onScreenVisionState;
+    this.onTurnComplete = handlers.onTurnComplete;
   }
 
   private setState(state: LiveState) {
@@ -269,8 +274,8 @@ export class MyraaAudioSession {
 
     try {
       // 1. Establish custom WebSocket server bridge
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      this.ws = new WebSocket(`${protocol}//${window.location.host}/live`);
+      // Same-origin on desktop; configured HTTPS backend on mobile/APK.
+      this.ws = new WebSocket(wsUrl("/live"));
       this.ws.binaryType = "blob";
 
       this.ws.onopen = async () => {
@@ -308,7 +313,7 @@ export class MyraaAudioSession {
           this.flushPendingTextMessages();
           // Optional pitch lift (Settings → Voice → Voice pitch).
           this.pitchShifter = null;
-          void fetch("/api/app-settings")
+          void saraFetch("/api/app-settings")
             .then((r) => (r.ok ? r.json() : null))
             .then((s) => {
               const semitones = Number(s?.voice?.pitch) || 0;
@@ -432,6 +437,7 @@ export class MyraaAudioSession {
 
           // Turn complete
           if (data.type === "turnComplete") {
+            this.onTurnComplete?.("model");
             // Once Myraa completes speaking, change visual state back to listening
             setTimeout(() => {
               if (this.activeSources.length === 0 && this.currentState === "speaking") {
@@ -651,6 +657,12 @@ export class MyraaAudioSession {
   }
 
   // Fully cleanup and release microphones & connection sockets
+  /** Stop Sara's voice immediately (used by the mobile "stop" button). */
+  public stopSpeaking() {
+    this.handleInterruption();
+    if (this.currentState === "speaking") this.setState("listening");
+  }
+
   public disconnect() {
     this.isActivated = false;
     this.liveReady = false;

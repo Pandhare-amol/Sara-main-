@@ -5,6 +5,8 @@
  * `saveProviderKey`, which posts the key once and keeps no copy.
  */
 
+import { saraFetch } from "./serverConfig";
+
 // ---- tasks ------------------------------------------------------------------------------
 
 export type TaskState =
@@ -175,7 +177,7 @@ export interface CharacterSummary {
 // ---- fetch helpers ----------------------------------------------------------------------
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await saraFetch(url, {
     method,
     cache: "no-store",
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },

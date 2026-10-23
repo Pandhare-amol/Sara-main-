@@ -8,6 +8,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { api, type ConfirmationRequest, type ModelSelection, type TaskView } from "./appApi";
+import { wsUrl } from "./serverConfig";
 
 export interface ModelNotice {
   id: number;
@@ -122,8 +123,7 @@ export function useAppEvents(enabled = true): AppEventsState {
 
     const connect = () => {
       if (disposed) return;
-      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-      socket = new WebSocket(`${protocol}//${location.host}/events`);
+      socket = new WebSocket(wsUrl("/events"));
       socket.onopen = () => {
         retry = 0;
         setState((s) => ({ ...s, connected: true }));

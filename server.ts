@@ -55,6 +55,15 @@ import {
   type ScreenVisionFrame,
 } from "./server_screenVision";
 import { ApiHubService, type ApiProviderStatus } from "./api_hub";
+import {
+  authorizeWebSocket,
+  createRemoteAccessGuard,
+  loadRemoteAccessConfig,
+  remoteToolDenied,
+  REMOTE_BLOCKED_LIVE_TOOLS,
+  RemoteAccessConfigError,
+  type RemoteAccessConfig,
+} from "./server_remoteAccess";
 
 dotenv.config();
 
@@ -648,11 +657,48 @@ async function callDesktopAgent(
   }
 }
 
+/** Version string from package.json, safe when the file is missing. */
+function appVersion(): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf-8"));
+    return String(pkg.version || "0.0.0");
+  } catch {
+    return "0.0.0";
+  }
+}
+
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.MYRAA_PORT) || 3000;
-  
-  app.use(express.json());
+  const PORT = Number(process.env.MYRAA_PORT) || Number(process.env.PORT) || 3000;
+
+  // Opt-in mobile/remote access. Defaults to the original local-only behaviour.
+  let remoteAccess: RemoteAccessConfig;
+  try {
+    remoteAccess = loadRemoteAccessConfig();
+  } catch (error) {
+    if (error instanceof RemoteAccessConfigError) {
+      console.error(`[Sara] ${error.message}`);
+      process.exit(1);
+    }
+    throw error;
+  }
+  if (remoteAccess.enabled) app.set("trust proxy", remoteAccess.trustProxy ? 1 : false);
+
+  app.use(express.json({ limit: "25mb" }));
+
+  // Health check: safe for uptime probes and for the mobile "test connection"
+  // button. Returns no user data and no secrets.
+  app.get("/api/health", (_req, res) => {
+    res.json({
+      ok: true,
+      name: "Sara",
+      version: appVersion(),
+      remoteAccess: remoteAccess.enabled,
+      authRequired: remoteAccess.enabled,
+    });
+  });
+
+  app.use(createRemoteAccessGuard(remoteAccess));
 
   // -------------------------------------------------------------------------
   // Event-driven cognitive runtime. This is backend-only and deliberately
@@ -720,11 +766,14 @@ async function startServer() {
   // Local-only API surface: reject requests whose Host/Origin is not this
   // machine (DNS-rebinding and cross-site requests from web pages).
   app.use((req, res, next) => {
+    // Remote access mode has already authenticated the caller; the local-only
+    // host/origin rule would reject a phone behind a reverse proxy.
+    if (remoteAccess.enabled) return next();
     const host = String(req.headers.host || "");
     const origin = String(req.headers.origin || "");
     const localHost = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host);
     const localOrigin = !origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin) || origin === "null";
-    if (!localHost || !localOrigin) return res.status(403).json({ error: "MYRAA only accepts local requests." });
+    if (!localHost || !localOrigin) return res.status(403).json({ error: "Sara only accepts local requests." });
     next();
   });
   runtime.registerRoutes(app);
@@ -1742,16 +1791,16 @@ async function startServer() {
   eventsWss.on("connection", (ws) => runtime.handleEventsSocket(ws));
 
   server.on("upgrade", (request, socket, head) => {
-    // Only MYRAA's own windows may open these sockets: a web page in the
-    // user's browser must never be able to listen in or drive the session.
-    const origin = String(request.headers.origin || "");
-    const host = String(request.headers.host || "");
-    const localOrigin = !origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
-    if (!localOrigin || !/^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host)) {
+    // A browser tab on this machine, or an authenticated remote device. Remote
+    // access requires SARA_ACCESS_TOKEN; the local-only rule still applies when
+    // remote access is disabled.
+    const auth = authorizeWebSocket(remoteAccess, request);
+    if (!auth.ok) {
+      logError(`WS_UPGRADE_REJECTED: ${"reason" in auth ? auth.reason : "denied"}`);
       socket.destroy();
       return;
     }
-    const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
+    const pathname = new URL(request.url || '/', `http://${request.headers.host}`).pathname;
     if (pathname === "/live") {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit("connection", ws, request);
@@ -1764,8 +1813,11 @@ async function startServer() {
   });
 
   // Handle client WebSocket Connection
-  wss.on("connection", async (clientWs) => {
-    console.log("Client WebSocket connected to /live");
+  wss.on("connection", async (clientWs, request) => {
+    const wsAuth = authorizeWebSocket(remoteAccess, request);
+    const isRemoteClient = wsAuth.ok ? wsAuth.remote : false;
+    (clientWs as unknown as { __saraRemote?: boolean }).__saraRemote = isRemoteClient;
+    console.log(`Client WebSocket connected to /live (${isRemoteClient ? "remote" : "local"})`);
     const connectionId = randomUUID();
     /**
      * One screen-vision pipeline per live connection. The pipeline is bound
@@ -2730,8 +2782,13 @@ async function startServer() {
                 if (LIVE_AGENT_TOOL_NAMES.has(String(fc.name))) {
                   (async () => {
                     let output: Record<string, unknown>;
+                    const toolName = String(fc.name);
                     try {
-                      output = await handleLiveAgentTool(runtime, String(fc.name), (fc.args || {}) as Record<string, unknown>);
+                      if (isRemoteClient && !remoteAccess.allowDesktopTools && REMOTE_BLOCKED_LIVE_TOOLS.has(toolName)) {
+                        output = remoteToolDenied(toolName);
+                      } else {
+                        output = await handleLiveAgentTool(runtime, toolName, (fc.args || {}) as Record<string, unknown>);
+                      }
                     } catch (error) {
                       output = { error: error instanceof Error ? error.message : String(error) };
                     }
@@ -3283,9 +3340,14 @@ async function startServer() {
     });
   }
 
-  server.listen(PORT, "127.0.0.1", () => {
-    logStartup(`MYRAA V2 server started on http://localhost:${PORT}`);
-    console.log(`[Server] Running on http://localhost:${PORT}`);
+  server.listen(PORT, remoteAccess.host, () => {
+    const shownHost = remoteAccess.host === "0.0.0.0" ? "localhost" : remoteAccess.host;
+    logStartup(`Sara server started on http://${remoteAccess.host}:${PORT} (remote access ${remoteAccess.enabled ? "ENABLED" : "disabled"})`);
+    console.log(`[Server] Running on http://${shownHost}:${PORT}`);
+    if (remoteAccess.enabled) {
+      console.log(`[Server] Remote access is ON. Allowed origins: ${remoteAccess.allowedOrigins.join(", ") || "(none configured)"}`);
+      if (!remoteAccess.allowDesktopTools) console.log("[Server] Remote PC control is OFF (SARA_REMOTE_ALLOW_DESKTOP not set).");
+    }
     // Kick off the desktop agent (probe + auto-spawn) immediately on boot.
     ensureDesktopAgent()
       .then(async () => {

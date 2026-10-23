@@ -5,6 +5,7 @@
  * (see character_import/) and fetched from the backend, which serves them
  * from the user's data folder. Both resolve to the same CharacterConfig.
  */
+import { saraFetch } from "../../lib/serverConfig";
 import type { CharacterConfig } from './types';
 import type { CharacterProfile } from '@/shared/character/profile';
 import { configFromProfile } from './fromProfile';
@@ -50,7 +51,7 @@ export function listCharacters(): Array<{ id: string; displayName: string }> {
 export async function listAllCharacters(): Promise<CharacterListing[]> {
   const builtIn: CharacterListing[] = Object.values(CHARACTERS).map((c) => ({ id: c.id, displayName: c.displayName, source: 'built-in' }));
   try {
-    const response = await fetch('/api/characters');
+    const response = await saraFetch('/api/characters');
     if (!response.ok) return builtIn;
     const users = (await response.json()) as Array<{ id: string; displayName: string; restrictions: string[]; summary: CharacterListing['summary'] }>;
     return [...builtIn, ...users.filter((u) => !(u.id in CHARACTERS)).map((u) => ({ id: u.id, displayName: u.displayName, source: 'user' as const, restrictions: u.restrictions, summary: u.summary }))];
@@ -60,7 +61,7 @@ export async function listAllCharacters(): Promise<CharacterListing[]> {
 }
 
 export async function fetchCharacterProfile(id: string): Promise<CharacterProfile> {
-  const response = await fetch(`/api/characters/${encodeURIComponent(id)}`);
+  const response = await saraFetch(`/api/characters/${encodeURIComponent(id)}`);
   if (!response.ok) throw new Error(`Character "${id}" is not available (${response.status}).`);
   return (await response.json()) as CharacterProfile;
 }
