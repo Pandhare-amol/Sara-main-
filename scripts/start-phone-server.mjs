@@ -84,6 +84,8 @@ const child = spawn(process.platform === "win32" ? "npx.cmd" : "npx", ["tsx", "s
   cwd: root,
   env,
   stdio: "inherit",
+  // Node refuses to spawn a .cmd file without a shell on Windows.
+  shell: process.platform === "win32",
 });
 
 const stop = (signal) => {
