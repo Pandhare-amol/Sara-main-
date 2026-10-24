@@ -4,7 +4,7 @@
  * Every panel reads the phone's own stores. Nothing here calls a Sara server —
  * there is none in this build — and nothing pretends a PC feature exists.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CheckCircle2, CircleAlert, CircleDot, ExternalLink, Film, KeyRound, Loader2, Mic, Smartphone, Trash2, Volume2, VolumeX, X,
 } from "lucide-react";
@@ -12,13 +12,15 @@ import type { MobilePrefs } from "../mobilePrefs";
 import { formatBytes, prepareImage, type PreparedImage } from "../image";
 import { PERSONA_PROFILES } from "../../../server_persona";
 import type { PersonaProfileId } from "../../lib/appApi";
-import { describeKey, forgetKey, maskKey, saveKey, type KeyInfo } from "./deviceKey";
+import { describeKey, forgetKey, maskKey, readKey, saveKey, type KeyInfo } from "./deviceKey";
+import { listModels, probeConnection, type ProbeResult } from "./gemini";
 import {
+  ACCENTS, BACKDROPS, FONT_SCALES, clearAllData,
   addMemory, clearMemories, deleteMemory, deleteReminder, listMemories, listReminders, listMessages, clearMessages,
-  loadSettings, saveSettings, setReminderDone, type StandaloneMessage, type StandaloneMemory, type StandaloneReminder,
-  type StandaloneSettings,
+  loadSettings, saveSettings, setReminderDone, resetSettings, type StandaloneMessage, type StandaloneMemory,
+  type StandaloneReminder, type StandaloneSettings,
 } from "./store";
-import { micAvailable, speechOutputAvailable } from "./voice";
+import { initSpeech, micAvailable, openSpeechSettings, speakTest, speechOutputAvailable } from "./voice";
 
 /* --------------------------------------------------------------------- shell */
 
@@ -362,16 +364,143 @@ const MODELS: Array<[string, string]> = [
   ["gemini-3.1-pro-preview", "Pro — slowest, deepest"],
 ];
 
-export function SettingsPanelS({ settings, prefs, onChange, onChangePrefs, onOpenKey, onClose }: {
+function Slider({ label, value, min, max, step, format, onChange }: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  format?: (value: number) => string;
+  onChange: (next: number) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-white/85">{label}</p>
+        <span className="shrink-0 font-mono text-[10px] text-white/45">{format ? format(value) : String(value)}</span>
+      </div>
+      <input
+        type="range"
+        aria-label={label}
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="mt-2 w-full accent-cyan-300"
+      />
+    </div>
+  );
+}
+
+function Choice({ active, label, detail, onClick }: { active: boolean; label: string; detail?: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left ${
+        active ? "border-cyan-300/40 bg-cyan-400/10" : "border-white/8 bg-white/[0.02]"
+      }`}
+    >
+      {active ? <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-cyan-200" /> : <CircleDot size={13} className="mt-0.5 shrink-0 text-white/25" />}
+      <span>
+        <span className="block text-[11px] text-white/85">{label}</span>
+        {detail && <span className="mt-0.5 block text-[9px] leading-relaxed text-white/35">{detail}</span>}
+      </span>
+    </button>
+  );
+}
+
+const PERSONA_TRAITS: Array<[keyof StandaloneSettings["persona"], string, number]> = [
+  ["warmth", "Warmth", 0],
+  ["humor", "Humour", 0],
+  ["formality", "Formality", 0],
+  ["directness", "Directness", 0],
+  ["empathy", "Empathy", 0],
+  ["energy", "Energy", 0],
+  ["curiosity", "Curiosity", 0],
+];
+
+/**
+ * "Customize" — every knob the phone app really has.
+ *
+ * Each control here is wired to something that changes behaviour or
+ * appearance; there are no decorative options.
+ */
+export function SettingsPanelS({ settings, prefs, onChange, onChangePrefs, onOpenKey, onClose, onEraseEverything }: {
   settings: StandaloneSettings;
   prefs: MobilePrefs;
   onChange: (patch: Partial<StandaloneSettings>) => void;
   onChangePrefs: (patch: Partial<MobilePrefs>) => void;
   onOpenKey: () => void;
   onClose: () => void;
+  onEraseEverything: () => void;
 }) {
+  const [discovered, setDiscovered] = useState<Array<{ id: string; label: string }>>([]);
+  const [modelNote, setModelNote] = useState<string | null>(null);
+  const [modelBusy, setModelBusy] = useState(false);
+  const [speechNote, setSpeechNote] = useState<string | null>(null);
+  const [voices, setVoices] = useState<string[]>([]);
+  const [confirmErase, setConfirmErase] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void initSpeech().then((status) => {
+      if (!cancelled) setVoices(status.voices);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function discoverModels() {
+    const key = readKey();
+    if (!key) {
+      setModelNote("Add your AI key first — the list comes from Google.");
+      return;
+    }
+    setModelBusy(true);
+    setModelNote(null);
+    const result = await listModels({ key });
+    setModelBusy(false);
+    if (!result.models.length) {
+      setModelNote(
+        result.status
+          ? `Google answered HTTP ${result.status}: ${result.detail || "no detail"}.`
+          : `The phone could not reach Google: ${result.detail || "no detail"}.`,
+      );
+      return;
+    }
+    setDiscovered(result.models.map((model) => ({ id: model.id, label: model.displayName })));
+    const hasCurrent = result.models.some((model) => model.id === settings.model);
+    setModelNote(
+      hasCurrent
+        ? `${result.models.length} models available. ${settings.model} is one of them.`
+        : `${result.models.length} models available. ${settings.model} is not among them — pick one above.`,
+    );
+  }
+
+  async function testVoice() {
+    setSpeechNote("Speaking…");
+    const spoke = await speakTest({
+      rate: settings.speech.rate,
+      pitch: settings.speech.pitch,
+      volume: settings.speech.volume,
+      voiceName: settings.speech.voiceName || undefined,
+    });
+    setSpeechNote(spoke ? "Played through the phone's speech engine." : "The phone has no speech engine. Open the speech settings below and install one.");
+  }
+
+  const modelOptions = useMemo(() => {
+    const map = new Map<string, string>(MODELS.map(([id, label]) => [id, label]));
+    for (const model of discovered) map.set(model.id, model.label);
+    if (!map.has(settings.model)) map.set(settings.model, settings.model);
+    return Array.from(map.entries());
+  }, [discovered, settings.model]);
+
   return (
-    <Sheet title="Settings" subtitle="Everything here is stored on this phone. Sara Mobile has her own settings, separate from the PC app." onClose={onClose}>
+    <Sheet title="Customize" subtitle="Everything here is stored on this phone. Sara Mobile has her own settings, separate from the PC app." onClose={onClose}>
       <SectionTitle>Her brain</SectionTitle>
       <div className="space-y-2">
         <Row label="AI key" detail="Stored on this device only.">
@@ -384,16 +513,72 @@ export function SettingsPanelS({ settings, prefs, onChange, onChangePrefs, onOpe
             aria-label="Model"
             value={settings.model}
             onChange={(event) => onChange({ model: event.target.value })}
-            className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white outline-none"
+            className="max-w-[11rem] rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white outline-none"
           >
-            {MODELS.map(([id, label]) => (
+            {modelOptions.map(([id, label]) => (
               <option key={id} value={id}>{label}</option>
             ))}
           </select>
         </Row>
-        <Row label="Read replies aloud" detail={speechOutputAvailable() ? "Uses the phone's own speech engine." : "This device reports no speech engine."}>
-          <Toggle label="Read replies aloud" on={settings.speakReplies && speechOutputAvailable()} onChange={(next) => onChange({ speakReplies: next })} />
+        <button
+          type="button"
+          onClick={() => void discoverModels()}
+          disabled={modelBusy}
+          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/70 disabled:opacity-50"
+        >
+          {modelBusy ? "Asking Google…" : "Use only the models my key allows"}
+        </button>
+        {modelNote && <p className="px-1 text-[10px] leading-relaxed text-white/45">{modelNote}</p>}
+        <Slider label="Creativity" value={settings.temperature} min={0} max={1.5} step={0.05} format={(value) => value.toFixed(2)} onChange={(temperature) => onChange({ temperature })} />
+        <Slider label="Longest answer" value={settings.maxOutputTokens} min={256} max={8192} step={256} format={(value) => `${value} tokens`} onChange={(maxOutputTokens) => onChange({ maxOutputTokens })} />
+        <Row label="Stream the answer as it is written" detail={settings.streaming ? "Words appear while she types." : "Off: one finished answer, easier on a slow connection."}>
+          <Toggle label="Stream replies" on={settings.streaming} onChange={(streaming) => onChange({ streaming })} />
         </Row>
+        <Slider label="Remembered turns sent" value={settings.historyTurns} min={0} max={40} step={2} format={(value) => `${value} turns`} onChange={(historyTurns) => onChange({ historyTurns })} />
+      </div>
+
+      <SectionTitle>Her voice</SectionTitle>
+      <div className="space-y-2">
+        <Row label="Read replies aloud" detail={speechOutputAvailable() ? "Uses the engine chosen below." : "No speech engine reported yet — check below."}>
+          <Toggle label="Read replies aloud" on={settings.speakReplies} onChange={(speakReplies) => onChange({ speakReplies })} />
+        </Row>
+        <div className="space-y-2">
+          <Choice active={settings.speech.engine === "auto"} label="Automatic" detail="Android's engine when it exists, otherwise the WebView's." onClick={() => onChange({ speech: { ...settings.speech, engine: "auto" } })} />
+          <Choice active={settings.speech.engine === "native"} label="Android speech engine" detail="Uses Google Text-to-Speech or whichever engine the phone has." onClick={() => onChange({ speech: { ...settings.speech, engine: "native" } })} />
+          <Choice active={settings.speech.engine === "web"} label="WebView speech" detail="The browser engine; often silent on Android." onClick={() => onChange({ speech: { ...settings.speech, engine: "web" } })} />
+        </div>
+        {voices.length > 0 && (
+          <Row label="Voice">
+            <select
+              aria-label="Speech voice"
+              value={settings.speech.voiceName}
+              onChange={(event) => onChange({ speech: { ...settings.speech, voiceName: event.target.value } })}
+              className="max-w-[11rem] rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white outline-none"
+            >
+              <option value="">Phone default</option>
+              {voices.map((voice) => (
+                <option key={voice} value={voice}>{voice}</option>
+              ))}
+            </select>
+          </Row>
+        )}
+        <Slider label="Speaking speed" value={settings.speech.rate} min={0.5} max={2} step={0.05} format={(value) => `${value.toFixed(2)}×`} onChange={(rate) => onChange({ speech: { ...settings.speech, rate } })} />
+        <Slider label="Pitch" value={settings.speech.pitch} min={0.5} max={2} step={0.05} format={(value) => value.toFixed(2)} onChange={(pitch) => onChange({ speech: { ...settings.speech, pitch } })} />
+        <Slider label="Volume" value={settings.speech.volume} min={0} max={1} step={0.05} format={(value) => `${Math.round(value * 100)}%`} onChange={(volume) => onChange({ speech: { ...settings.speech, volume } })} />
+        <Slider label="Read at most" value={settings.speech.maxChars} min={120} max={4000} step={60} format={(value) => `${value} characters`} onChange={(maxChars) => onChange({ speech: { ...settings.speech, maxChars } })} />
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" onClick={() => void testVoice()} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/75">
+            Test the voice
+          </button>
+          <button
+            type="button"
+            onClick={() => void openSpeechSettings().then(setSpeechNote)}
+            className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/75"
+          >
+            Android speech settings
+          </button>
+        </div>
+        {speechNote && <p className="px-1 text-[10px] leading-relaxed text-white/45">{speechNote}</p>}
       </div>
 
       <SectionTitle>How she talks</SectionTitle>
@@ -414,6 +599,21 @@ export function SettingsPanelS({ settings, prefs, onChange, onChangePrefs, onOpe
           );
         })}
       </div>
+      <div className="mt-2 space-y-2">
+        {PERSONA_TRAITS.map(([trait, label]) => (
+          <div key={trait}>
+            <Slider
+              label={label}
+              value={Number(settings.persona[trait] ?? 50)}
+              min={0}
+              max={100}
+              step={2}
+              format={(value) => `${value}%`}
+              onChange={(value) => onChange({ persona: { ...settings.persona, [trait]: value } })}
+            />
+          </div>
+        ))}
+      </div>
 
       <SectionTitle>Reality mode</SectionTitle>
       <div className="space-y-2">
@@ -422,23 +622,92 @@ export function SettingsPanelS({ settings, prefs, onChange, onChangePrefs, onOpe
           ["standard", "Standard", "Separates facts from guesses when it matters."],
           ["strict", "Strict", "Facts, assumptions, predictions, unknowns, confidence."],
         ] as Array<[StandaloneSettings["reality"]["mode"], string, string]>) ).map(([id, label, detail]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => onChange({ reality: { ...settings.reality, mode: id } })}
-            className={`flex w-full items-start gap-2.5 rounded-xl border px-3 py-2 text-left ${settings.reality.mode === id ? "border-cyan-300/40 bg-cyan-400/10" : "border-white/8 bg-white/[0.02]"}`}
-          >
-            {settings.reality.mode === id ? <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-cyan-200" /> : <CircleDot size={13} className="mt-0.5 shrink-0 text-white/25" />}
-            <span>
-              <span className="block text-[11px] text-white/85">{label}</span>
-              <span className="mt-0.5 block text-[9px] leading-relaxed text-white/35">{detail}</span>
-            </span>
-          </button>
+          <div key={id}>
+            <Choice active={settings.reality.mode === id} label={label} detail={detail} onClick={() => onChange({ reality: { ...settings.reality, mode: id } })} />
+          </div>
         ))}
       </div>
 
-      <SectionTitle>This device</SectionTitle>
+      <SectionTitle>You</SectionTitle>
       <div className="space-y-2">
+        <div className="rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2.5">
+          <p className="text-xs text-white/85">What she calls you</p>
+          <input
+            aria-label="Your name"
+            value={settings.nickname}
+            placeholder="Your name (optional)"
+            onChange={(event) => onChange({ nickname: event.target.value })}
+            className="mt-2 w-full rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[12px] text-white outline-none"
+          />
+        </div>
+        <div className="rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2.5">
+          <p className="text-xs text-white/85">Your own instructions to her</p>
+          <p className="mt-0.5 text-[10px] leading-relaxed text-white/40">Added to every conversation, word for word.</p>
+          <textarea
+            aria-label="Custom instructions"
+            value={settings.customInstructions}
+            rows={4}
+            placeholder="For example: answer in Marathi, keep replies under three sentences, call me by my nickname…"
+            onChange={(event) => onChange({ customInstructions: event.target.value })}
+            className="mt-2 w-full resize-y rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[12px] leading-relaxed text-white outline-none"
+          />
+        </div>
+      </div>
+
+      <SectionTitle>Look</SectionTitle>
+      <div className="space-y-2">
+        <div className="rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2.5">
+          <p className="text-xs text-white/85">Colour</p>
+          <div className="mt-2 flex gap-2">
+            {(Object.keys(ACCENTS) as Array<keyof typeof ACCENTS>).map((id) => (
+              <button
+                key={id}
+                type="button"
+                aria-label={`Colour ${ACCENTS[id].label}`}
+                aria-pressed={settings.appearance.accent === id}
+                onClick={() => onChange({ appearance: { ...settings.appearance, accent: id } })}
+                style={{ backgroundColor: ACCENTS[id].hex }}
+                className={`h-8 w-8 rounded-full border-2 ${settings.appearance.accent === id ? "border-white/80" : "border-transparent"}`}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2.5">
+          <p className="text-xs text-white/85">Text size</p>
+          <div className="mt-2 grid grid-cols-4 gap-2">
+            {(Object.keys(FONT_SCALES) as Array<keyof typeof FONT_SCALES>).map((id) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={settings.appearance.fontScale === id}
+                onClick={() => onChange({ appearance: { ...settings.appearance, fontScale: id } })}
+                className={`rounded-lg border px-2 py-1.5 text-[10px] ${
+                  settings.appearance.fontScale === id ? "border-cyan-300/40 bg-cyan-400/10 text-white" : "border-white/10 text-white/60"
+                }`}
+              >
+                {FONT_SCALES[id].label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <Row label="Background">
+          <select
+            aria-label="Background"
+            value={settings.appearance.backdrop}
+            onChange={(event) => onChange({ appearance: { ...settings.appearance, backdrop: event.target.value as StandaloneSettings["appearance"]["backdrop"] } })}
+            className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white outline-none"
+          >
+            {(Object.keys(BACKDROPS) as Array<keyof typeof BACKDROPS>).map((id) => (
+              <option key={id} value={id}>{BACKDROPS[id].label}</option>
+            ))}
+          </select>
+        </Row>
+        <Row label="Show times next to messages">
+          <Toggle label="Timestamps" on={settings.appearance.timestamps} onChange={(timestamps) => onChange({ appearance: { ...settings.appearance, timestamps } })} />
+        </Row>
+        <Row label="Show the glowing emblem" detail="Used when no companion video is set.">
+          <Toggle label="Emblem" on={settings.appearance.emblem} onChange={(emblem) => onChange({ appearance: { ...settings.appearance, emblem } })} />
+        </Row>
         <Row label="Reduced motion" detail="Freeze ambient animation and looping video.">
           <Toggle label="Reduced motion" on={prefs.reducedMotion} onChange={(next) => onChangePrefs({ reducedMotion: next })} />
         </Row>
@@ -447,76 +716,208 @@ export function SettingsPanelS({ settings, prefs, onChange, onChangePrefs, onOpe
         </Row>
       </div>
 
-      <p className="mt-4 pb-1 text-[10px] leading-relaxed text-white/25">
-        These settings live on this phone. The PC app has its own separate settings, memory and key — changing one never changes the other.
-      </p>
+      <SectionTitle>Your data</SectionTitle>
+      <div className="space-y-2 pb-2">
+        <button
+          type="button"
+          onClick={() => {
+            clearMessages();
+            onClose();
+          }}
+          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/70"
+        >
+          Clear the conversation
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            clearMemories();
+            onClose();
+          }}
+          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/70"
+        >
+          Forget everything she remembers
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            resetSettings();
+            onClose();
+          }}
+          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/70"
+        >
+          Reset these settings
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (!confirmErase) {
+              setConfirmErase(true);
+              return;
+            }
+            onEraseEverything();
+            onClose();
+          }}
+          className="w-full rounded-xl border border-rose-400/25 bg-rose-500/[0.08] px-3 py-2 text-[11px] text-rose-200/80"
+        >
+          {confirmErase ? "Tap again to erase the key, memory, reminders and conversation" : "Erase everything on this phone"}
+        </button>
+        <p className="px-1 text-[10px] leading-relaxed text-white/25">
+          These settings live on this phone. The PC app has its own separate settings, memory and key — changing one never changes the other.
+        </p>
+      </div>
     </Sheet>
   );
 }
 
 /* ------------------------------------------------------------------ self check */
 
-export function SelfCheckPanel({ keyInfo, model, onOpenKey, onClose }: {
+export function SelfCheckPanel({ keyInfo, settings, onOpenKey, onOpenSettings, onModelChange, onClose }: {
   keyInfo: KeyInfo;
-  model: string;
+  settings: StandaloneSettings;
   onOpenKey: () => void;
+  onOpenSettings: () => void;
+  onModelChange: (model: string) => void;
   onClose: () => void;
 }) {
   const [storage, setStorage] = useState<"unknown" | "ok" | "blocked">("unknown");
+  const [speech, setSpeech] = useState<Awaited<ReturnType<typeof initSpeech>> | null>(null);
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
+  const [probeBusy, setProbeBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
   useEffect(() => {
     try {
-      const probe = "sara.mobile.probe";
-      window.localStorage.setItem(probe, "1");
-      window.localStorage.removeItem(probe);
+      const probeKey = "sara.mobile.probe";
+      window.localStorage.setItem(probeKey, "1");
+      window.localStorage.removeItem(probeKey);
       setStorage("ok");
     } catch {
       setStorage("blocked");
     }
   }, []);
 
-  const rows: Array<{ label: string; state: "ok" | "warn" | "no"; detail: string; action?: () => void }> = [
+  useEffect(() => {
+    let cancelled = false;
+    void initSpeech().then((status) => {
+      if (!cancelled) setSpeech(status);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const runProbe = useCallback(
+    async (live: boolean) => {
+      const key = readKey();
+      if (!key) {
+        setNote("Add your AI key first, then test again.");
+        return;
+      }
+      setProbeBusy(true);
+      setNote(null);
+      try {
+        setProbe(await probeConnection({ key, model: settings.model, live }));
+      } catch (error) {
+        setNote(error instanceof Error ? error.message : String(error));
+      } finally {
+        setProbeBusy(false);
+      }
+    },
+    [settings.model],
+  );
+
+  useEffect(() => {
+    void runProbe(false);
+  }, [runProbe]);
+
+  const deviceRows: Array<{ label: string; state: "ok" | "warn" | "no"; detail: string; action?: { label: string; run: () => void } }> = [
     {
       label: "AI key",
       state: keyInfo.present ? "ok" : "no",
       detail: keyInfo.present ? `Stored on this phone (${keyInfo.hint}).` : "No key yet — every reply will fail.",
-      action: keyInfo.present ? undefined : onOpenKey,
+      action: keyInfo.present ? undefined : { label: "Add", run: onOpenKey },
     },
-    { label: "Model", state: "ok", detail: model },
+    { label: "Model", state: "ok", detail: settings.model },
     {
-      label: "Conversation engine",
-      state: navigator.onLine ? "ok" : "warn",
-      detail: navigator.onLine ? "Streaming over the network to Google." : "This device reports no network connection.",
+      label: "Speech output",
+      state: speech ? (speech.kind === "none" ? "no" : speech.kind === "web" ? "warn" : "ok") : "warn",
+      detail: !speech
+        ? "Checking the phone's speech engine…"
+        : speech.kind === "native"
+          ? `Android's engine is ready (${speech.engine}).`
+          : speech.kind === "web"
+            ? "Only the WebView's speech synthesis is available — it is often silent on Android. Install a Text-to-speech engine for a real voice."
+            : speech.detail,
+      action: speech && speech.kind !== "native" ? { label: "Fix", run: onOpenSettings } : undefined,
     },
-    { label: "Speech output", state: speechOutputAvailable() ? "ok" : "no", detail: speechOutputAvailable() ? "The phone's speech engine is available." : "No speech engine — replies stay text." },
     { label: "Microphone", state: micAvailable() ? "ok" : "no", detail: micAvailable() ? "Recording is available; permission is asked on first use." : "No recorder available in this webview." },
     { label: "Camera", state: navigator.mediaDevices ? "ok" : "warn", detail: navigator.mediaDevices ? "Photos are downscaled on the phone before sending." : "No camera API reported." },
     { label: "Local storage", state: storage === "blocked" ? "no" : storage === "ok" ? "ok" : "warn", detail: storage === "blocked" ? "Storage is blocked: memory, reminders and your key cannot persist." : "Memory, reminders and settings persist on this phone." },
     { label: "Computer control", state: "no", detail: "Not part of this app: no access to a PC, files or messaging apps." },
   ];
 
+  const icons = (state: "ok" | "warn" | "no") =>
+    state === "ok" ? <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-emerald-300/80" /> : state === "warn" ? (
+      <CircleAlert size={13} className="mt-0.5 shrink-0 text-amber-300/80" />
+    ) : (
+      <CircleAlert size={13} className="mt-0.5 shrink-0 text-rose-300/70" />
+    );
+
   return (
     <Sheet title="Self-check" subtitle="What this phone checked just now — not what the app hopes is true." onClose={onClose}>
+      <SectionTitle>This phone</SectionTitle>
       <div className="space-y-2">
-        {rows.map((row) => (
+        {deviceRows.map((row) => (
           <div key={row.label} className="flex items-start gap-2 rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2">
-            {row.state === "ok" ? (
-              <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-emerald-300/80" />
-            ) : row.state === "warn" ? (
-              <CircleAlert size={13} className="mt-0.5 shrink-0 text-amber-300/80" />
-            ) : (
-              <CircleAlert size={13} className="mt-0.5 shrink-0 text-rose-300/70" />
-            )}
+            {icons(row.state)}
             <div className="min-w-0 flex-1">
               <p className="text-[11px] text-white/80">{row.label}</p>
               <p className="mt-0.5 text-[10px] leading-relaxed text-white/40">{row.detail}</p>
             </div>
             {row.action && (
-              <button type="button" onClick={row.action} className="shrink-0 rounded-lg border border-white/10 px-2 py-1 text-[10px] text-white/70">
-                Fix
+              <button type="button" onClick={row.action.run} className="shrink-0 rounded-lg border border-white/10 px-2 py-1 text-[10px] text-white/70">
+                {row.action.label}
               </button>
             )}
           </div>
         ))}
+      </div>
+
+      <SectionTitle>The connection to Google</SectionTitle>
+      <div className="space-y-2">
+        {probe?.steps?.map((step) => (
+          <div key={step.id} className="flex items-start gap-2 rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2">
+            {icons(step.state)}
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] text-white/80">{step.label}</p>
+              <p className="mt-0.5 break-words text-[10px] leading-relaxed text-white/40">{step.detail}</p>
+            </div>
+          </div>
+        ))}
+        {probeBusy && <p className="px-1 text-[10px] text-white/40">Checking…</p>}
+        {!probe && !probeBusy && <p className="px-1 text-[10px] text-white/40">Add a key, then run the test.</p>}
+        {note && <p className="px-1 text-[10px] text-rose-200/70">{note}</p>}
+        {probe?.modelKnown === false && probe.models.length > 0 && (
+          <button
+            type="button"
+            onClick={() => onModelChange(probe.models[0].id)}
+            className="w-full rounded-xl border border-amber-400/25 bg-amber-500/[0.08] px-3 py-2 text-[11px] text-amber-100/85"
+          >
+            Use {probe.models[0].id} instead
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={probeBusy}
+          onClick={() => void runProbe(true)}
+          className="w-full rounded-xl border border-cyan-300/25 bg-cyan-400/10 px-3 py-2 text-[11px] text-cyan-100/85 disabled:opacity-50"
+        >
+          {probeBusy ? "Testing…" : "Test connection now (asks the model one question)"}
+        </button>
+        <p className="px-1 text-[10px] leading-relaxed text-white/25">
+          This test uses your key exactly as a conversation would, so a failure here means a chat would fail the same way.
+        </p>
       </div>
     </Sheet>
   );

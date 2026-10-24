@@ -103,6 +103,10 @@ async function run() {
   const selfCheck = text();
   check("self-check reports the key", selfCheck.includes("AI key"));
   check("self-check reports computer control as unavailable", selfCheck.includes("Not part of this app"));
+  check("self-check checks the real connection", selfCheck.includes("The connection to Google"));
+  check("self-check offers a live test", selfCheck.includes("Test connection now"));
+  check("self-check names the failing step instead of saying nothing", /Reach Google/.test(text()));
+  check("self-check reports the speech engine truthfully", /Speech output/.test(text()));
   clickByLabel("Close");
   await sleep(200);
 
@@ -128,8 +132,35 @@ async function run() {
   check("settings says it is separate from the PC", settings.includes("separate from the PC app"));
   const modelSelect = document.querySelector('select[aria-label="Model"]') as HTMLSelectElement | null;
   check("settings lists models", Boolean(modelSelect && modelSelect.options.length >= 3));
-  clickByLabel("Close");
+
+  // Customization: colour, text size, voice and the user's own instructions.
+  check("customize offers her voice controls", settings.includes("Test the voice") && settings.includes("Speaking speed"));
+  check("customize offers a colour choice", Boolean(document.querySelector('[aria-label="Colour Violet"]')));
+  check("customize offers text sizes", settings.includes("Largest"));
+  check("customize lets the user write their own instructions", Boolean(document.querySelector('[aria-label="Custom instructions"]')));
+
+  clickByLabel("Colour Violet");
   await sleep(200);
+  const sendStyle = document.querySelector('[aria-label="Send"]')?.getAttribute("style") || "";
+  check("the accent colour really reaches the send button", /167, 139, 250/.test(sendStyle));
+
+  clickByText("Largest");
+  await sleep(250);
+  const shell = document.querySelector("#root > div") as HTMLElement | null;
+  check("text size really scales the app", shell?.style.zoom === "1.2");
+
+  const nameInput = document.querySelector('[aria-label="Your name"]') as HTMLInputElement | null;
+  check("customize can store what she calls you", Boolean(nameInput));
+  if (nameInput) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    setter?.call(nameInput, "Amol");
+    nameInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await sleep(200);
+    check("the nickname is saved on the phone", /"nickname":"Amol"/.test(String(window.localStorage.getItem("sara.mobile.settings.v1"))));
+  }
+
+  clickByLabel("Close");
+  await sleep(250);
 
   // A send without a network must fail loudly, never pretend.
   type("Message Sara", "hello there");

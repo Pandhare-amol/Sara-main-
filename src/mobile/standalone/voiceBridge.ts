@@ -8,12 +8,18 @@ import { transcribe } from "./gemini";
 import type { VoiceNote } from "./voice";
 
 export {
+  forgetSpeechStatus,
+  hasNativeVoice,
+  initSpeech,
   micAvailable,
+  openSpeechSettings,
+  speak,
+  speakTest,
   speechOutputAvailable,
   startRecording,
-  speak,
   stopSpeaking,
   voiceFacts,
+  type SpeechStatus,
   type Recorder,
   type VoiceNote,
 } from "./voice";

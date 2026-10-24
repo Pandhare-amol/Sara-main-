@@ -6,7 +6,7 @@
  * Sara. It runs the conversation itself, against the user's own key, and keeps
  * everything on the device.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { Camera, Film, KeyRound, Menu, Mic, Send, Settings as SettingsIcon, ShieldQuestion, Square, Volume2, X } from "lucide-react";
 import { useMobilePrefs, useKeyboardInset } from "../mobilePrefs";
 import { StageVideo } from "../StageVideo";
@@ -15,10 +15,13 @@ import { describeKey, readKey, type KeyInfo } from "./deviceKey";
 import { GeminiError } from "./gemini";
 import { lookAtPhoto, runTurn } from "./engine";
 import {
-  appendMessage, clearMessages, dueReminders, listMemories, listMessages, listReminders, loadSettings, saveSettings, setReminderDone,
+  ACCENTS, BACKDROPS, FONT_SCALES,
+  appendMessage, clearAllData, clearMessages, dueReminders, listMemories, listMessages, listReminders, loadSettings, removeLastMessage,
+  resetSettings, saveSettings, setReminderDone,
   type StandaloneMemory, type StandaloneMessage, type StandaloneReminder, type StandaloneSettings,
 } from "./store";
-import { micAvailable, speak, speechOutputAvailable, startRecording, stopSpeaking, transcribeNote, voiceFacts } from "./voiceBridge";
+import { forgetKey } from "./deviceKey";
+import { initSpeech, micAvailable, speak, speechOutputAvailable, startRecording, stopSpeaking, transcribeNote, voiceFacts } from "./voiceBridge";
 import {
   CompanionSheet, ConversationPanel, KeyBanner, KeyPanel, LimitsPanel, MemoryPanelS, RemindersPanel, SelfCheckPanel,
   SettingsPanelS, Sheet, VisionPanelS, VideoPicker,
@@ -62,6 +65,29 @@ export function StandaloneApp() {
   }, []);
 
   const refreshKey = useCallback(() => setKeyInfo(describeKey(readKey())), []);
+
+  /* Speech: ask the phone once per launch what engine it really has. */
+  const [speechKind, setSpeechKind] = useState<string>("checking");
+  useEffect(() => {
+    let cancelled = false;
+    void initSpeech().then((status) => {
+      if (!cancelled) setSpeechKind(status.kind);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const speechOptions = useMemo(
+    () => ({
+      rate: settings.speech.rate,
+      pitch: settings.speech.pitch,
+      volume: settings.speech.volume,
+      voiceName: settings.speech.voiceName || undefined,
+      maxChars: settings.speech.maxChars,
+    }),
+    [settings.speech],
+  );
 
   /* ------------------------------------------------------------ companion clip */
 
@@ -126,7 +152,7 @@ export function StandaloneApp() {
       setNotice(`Reminder: ${due.map((item) => item.text).join(" · ")}`);
       due.forEach((item) => setReminderDone(item.id, true));
       setReminders(listReminders());
-      if (settings.speakReplies && speechOutputAvailable()) void speak(`Reminder: ${due.map((item) => item.text).join(". ")}`);
+      if (settings.speakReplies && speechOutputAvailable()) void speak(`Reminder: ${due.map((item) => item.text).join(". ")}`, { maxChars: 400 });
     };
     check();
     const timer = window.setInterval(check, 30_000);
@@ -148,9 +174,9 @@ export function StandaloneApp() {
   const finishTurn = useCallback(
     (text: string) => {
       if (!settings.speakReplies || !speechOutputAvailable()) return;
-      void speak(text);
+      void speak(text, speechOptions);
     },
-    [settings.speakReplies],
+    [settings.speakReplies, speechOptions],
   );
 
   async function send(text: string, spoken = false) {
@@ -184,7 +210,11 @@ export function StandaloneApp() {
       void optimistic;
     } catch (err) {
       setStreaming(null);
+      // The turn did not happen: take the message back out of the log and put it
+      // back in the box, so "try again" sends it once, not twice.
+      removeLastMessage("user");
       setMessages(listMessages());
+      setDraft(clean);
       const message =
         err instanceof GeminiError
           ? err.message
@@ -271,6 +301,9 @@ export function StandaloneApp() {
     ? { url: clipUrl, poster: clipAsset?.poster ?? null, muted: !prefs.videoSound, fit: prefs.videoFit, paused: prefs.reducedMotion }
     : null;
   const micReady = micAvailable();
+  const accent = ACCENTS[settings.appearance.accent] ?? ACCENTS.cyan;
+  const backdrop = BACKDROPS[settings.appearance.backdrop] ?? BACKDROPS.deep;
+  const zoom = FONT_SCALES[settings.appearance.fontScale]?.zoom ?? 1;
 
   useEffect(() => {
     // `scrollTo` is missing in some older WebViews; setting scrollTop works
@@ -280,15 +313,25 @@ export function StandaloneApp() {
   }, [messages.length, streaming]);
 
   return (
-    <div className="relative flex h-[100dvh] w-full flex-col overflow-hidden bg-[#03040a] text-white" style={{ paddingBottom: keyboardInset }}>
-      <div className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full bg-indigo-700/20 blur-[100px]" />
-      <div className="pointer-events-none absolute -bottom-32 -right-24 h-80 w-80 rounded-full bg-cyan-600/15 blur-[110px]" />
+    <div
+      className="relative flex w-full flex-col overflow-hidden text-white"
+      style={{
+        // `zoom` scales the whole interface; the height is divided by it so the
+        // app still fits the screen exactly at every text size.
+        zoom,
+        height: `${(100 / zoom).toFixed(3)}dvh`,
+        background: backdrop.base,
+        paddingBottom: keyboardInset,
+      } as CSSProperties}
+    >
+      <div className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full blur-[100px]" style={{ background: backdrop.glow }} />
+      <div className="pointer-events-none absolute -bottom-32 -right-24 h-80 w-80 rounded-full blur-[110px]" style={{ background: accent.soft }} />
 
       <header className="relative z-30 flex items-center gap-3 px-5 pb-1 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <span className="font-display text-[13px] font-semibold uppercase tracking-[0.42em] text-white/70">Sara</span>
         <span className="rounded-full border border-white/10 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider text-white/35">mobile</span>
         <div className="ml-auto flex items-center gap-1.5">
-          {busy && <span className="font-mono text-[9px] uppercase tracking-wider text-cyan-200/60">{recording ? "listening" : "thinking"}</span>}
+          {busy && <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: accent.hex, opacity: 0.7 }}>{recording ? "listening" : "thinking"}</span>}
           <button type="button" aria-label="Companion look" onClick={() => setSheet("look")} className="rounded-xl border border-white/10 bg-white/[0.04] p-2 text-white/60">
             <Film size={17} />
           </button>
@@ -364,16 +407,36 @@ export function StandaloneApp() {
       )}
 
       {error && (
-        <div className="relative z-30 mx-5 mb-1 flex items-start gap-2 rounded-xl border border-rose-400/25 bg-rose-500/[0.08] px-3 py-2">
-          <span className="min-w-0 flex-1 text-[11px] leading-relaxed text-rose-100/90">{error}</span>
-          <button type="button" aria-label="Dismiss error" onClick={() => setError(null)} className="text-rose-200/60"><X size={12} /></button>
+        <div className="relative z-30 mx-5 mb-1 rounded-xl border border-rose-400/25 bg-rose-500/[0.08] px-3 py-2">
+          <div className="flex items-start gap-2">
+            <span className="min-w-0 flex-1 text-[11px] leading-relaxed text-rose-100/90">{error}</span>
+            <button type="button" aria-label="Dismiss error" onClick={() => setError(null)} className="text-rose-200/60"><X size={12} /></button>
+          </div>
+          <div className="mt-1.5 flex gap-2">
+            {draft.trim() && (
+              <button
+                type="button"
+                onClick={() => void send(draft)}
+                className="rounded-lg border border-rose-300/25 bg-rose-400/10 px-2.5 py-1 text-[10px] text-rose-100/85"
+              >
+                Try again
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setSheet("selfcheck")}
+              className="rounded-lg border border-white/12 bg-white/[0.04] px-2.5 py-1 text-[10px] text-white/70"
+            >
+              Test connection
+            </button>
+          </div>
         </div>
       )}
 
       {/* Stage: the user's clip, or a quiet emblem. No 3D model ships in this app. */}
       <div className="relative w-full flex-1 overflow-hidden">
         <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-[8%]">
-          <div className="h-40 w-40 rounded-full border border-cyan-300/20 shadow-[0_0_60px_rgba(34,211,238,0.12)_inset]" />
+          <div className="h-40 w-40 rounded-full border shadow-[0_0_60px_rgba(34,211,238,0.12)_inset]" style={{ borderColor: accent.soft }} />
         </div>
         {clip ? (
           <>
@@ -392,7 +455,12 @@ export function StandaloneApp() {
           </>
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-            <div className="h-24 w-24 rounded-full bg-[radial-gradient(circle_at_35%_30%,#22d3ee,#0e7490_45%,transparent_72%)] shadow-[0_0_50px_rgba(34,211,238,0.28)]" />
+            {settings.appearance.emblem && (
+              <div
+                className="h-24 w-24 rounded-full shadow-[0_0_50px_rgba(34,211,238,0.28)]"
+                style={{ backgroundImage: `radial-gradient(circle at 35% 30%, ${accent.hex}, ${accent.deep} 45%, transparent 72%)` }}
+              />
+            )}
             <span className="font-mono text-[9px] uppercase tracking-[0.3em] text-white/30">on this phone</span>
           </div>
         )}
@@ -400,9 +468,16 @@ export function StandaloneApp() {
         {/* Latest exchange, readable without opening the sheet. */}
         <div ref={scrollRef} className="absolute inset-x-0 bottom-0 max-h-[52%] overflow-y-auto px-5 pb-2">
           {streaming ? (
-            <p className="whitespace-pre-wrap rounded-2xl border border-cyan-300/15 bg-black/45 px-3 py-2 text-[12px] leading-relaxed text-white/85 backdrop-blur-sm">{streaming}</p>
+            <p className="whitespace-pre-wrap rounded-2xl border bg-black/45 px-3 py-2 text-[12px] leading-relaxed text-white/85 backdrop-blur-sm" style={{ borderColor: `${accent.hex}26` }}>{streaming}</p>
           ) : lastSara ? (
-            <p className="whitespace-pre-wrap rounded-2xl border border-cyan-300/15 bg-black/40 px-3 py-2 text-[12px] leading-relaxed text-white/85 backdrop-blur-sm">{lastSara.text}</p>
+            <div>
+              <p className="whitespace-pre-wrap rounded-2xl border bg-black/40 px-3 py-2 text-[12px] leading-relaxed text-white/85 backdrop-blur-sm" style={{ borderColor: `${accent.hex}26` }}>{lastSara.text}</p>
+              {settings.appearance.timestamps && (
+                <p className="mt-1 text-right font-mono text-[9px] text-white/25">
+                  {new Date(lastSara.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+                </p>
+              )}
+            </div>
           ) : (
             <p className="text-center text-[11px] leading-relaxed text-white/30">
               {keyInfo.present ? "Ask her anything — or hold the microphone." : "Paste your AI key, then ask her anything."}
@@ -414,7 +489,7 @@ export function StandaloneApp() {
       {settings.speakReplies && speechOutputAvailable() && (
         <div className="relative z-20 flex justify-center pb-1">
           <span className="flex items-center gap-1 rounded-full bg-black/30 px-2 py-0.5 font-mono text-[8px] uppercase tracking-wider text-white/25">
-            <Volume2 size={9} /> replies are spoken
+            <Volume2 size={9} /> {speechKind === "native" ? "replies use the phone's voice" : "replies are spoken"}
           </span>
         </div>
       )}
@@ -452,7 +527,8 @@ export function StandaloneApp() {
             type="submit"
             aria-label="Send"
             disabled={!draft.trim() || busy}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-cyan-300/30 bg-cyan-400/15 text-cyan-100 disabled:opacity-30"
+            style={{ borderColor: `${accent.hex}4d`, background: accent.soft, color: accent.hex }}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border disabled:opacity-30"
           >
             <Send size={16} />
           </button>
@@ -484,9 +560,29 @@ export function StandaloneApp() {
           onChangePrefs={updatePrefs}
           onOpenKey={() => setSheet("key")}
           onClose={() => setSheet(null)}
+          onEraseEverything={() => {
+            clearAllData();
+            forgetKey();
+            resetSettings();
+            setSettings(loadSettings());
+            setMessages(listMessages());
+            setMemories(listMemories());
+            setReminders(listReminders());
+            refreshKey();
+            setNotice("Everything stored on this phone has been erased.");
+          }}
         />
       )}
-      {sheet === "selfcheck" && <SelfCheckPanel keyInfo={keyInfo} model={settings.model} onOpenKey={() => setSheet("key")} onClose={() => setSheet(null)} />}
+      {sheet === "selfcheck" && (
+        <SelfCheckPanel
+          keyInfo={keyInfo}
+          settings={settings}
+          onOpenKey={() => setSheet("key")}
+          onOpenSettings={() => setSheet("settings")}
+          onModelChange={(model) => setSettings(saveSettings({ model }))}
+          onClose={() => setSheet(null)}
+        />
+      )}
       {sheet === "limits" && <LimitsPanel onClose={() => setSheet(null)} />}
       {sheet === "key" && (
         <KeyPanel

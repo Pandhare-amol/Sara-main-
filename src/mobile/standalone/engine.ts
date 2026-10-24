@@ -71,6 +71,19 @@ export function buildSystemPrompt(options: {
     );
   }
 
+  if (settings.nickname) {
+    blocks.push(`The user asked you to call them "${settings.nickname}". Use it naturally, not in every sentence.`);
+  }
+
+  if (settings.customInstructions.trim()) {
+    blocks.push(
+      [
+        "THE USER'S OWN INSTRUCTIONS FOR YOU (they wrote these in Settings; follow them unless they conflict with the rules below):",
+        settings.customInstructions.trim().slice(0, 2000),
+      ].join("\n"),
+    );
+  }
+
   blocks.push(
     [
       "RULES",
@@ -235,13 +248,13 @@ export async function runTurn(input: string, deps: TurnDeps): Promise<TurnResult
     return { handled: { kind: "remind", message, saved: Boolean(reminder), reminder: reminder ?? undefined }, answer: "" };
   }
 
-  const history: ChatTurn[] = listMessages()
-    .slice(-12)
+  const turns = Math.max(0, Math.min(40, settings.historyTurns));
+  const history: ChatTurn[] = (turns > 0 ? listMessages().slice(-turns) : [])
     .filter((message) => message.text.trim().length > 0)
     .map((message) => ({ role: message.role === "sara" ? "model" : "user", text: message.text }));
 
   appendMessage({ role: "user", text });
-  const answer = await streamChat({
+  const request = {
     key: deps.key,
     model: deps.model ?? settings.model,
     system: buildSystemPrompt({ settings, now }),
@@ -250,9 +263,15 @@ export async function runTurn(input: string, deps: TurnDeps): Promise<TurnResult
     fetchImpl: deps.fetchImpl,
     baseUrl: deps.baseUrl,
     signal: deps.signal,
-    onDelta: deps.onDelta,
-    temperature: 0.8,
-  });
+    temperature: settings.temperature,
+    maxOutputTokens: settings.maxOutputTokens,
+  };
+
+  // Streaming is a setting: turning it off sends one request and shows the
+  // finished answer, which is easier on slow connections and older WebViews.
+  const answer = settings.streaming
+    ? await streamChat({ ...request, onDelta: deps.onDelta })
+    : await generate(request);
   appendMessage({ role: "sara", text: answer });
   return { handled: null, answer };
 }
@@ -275,7 +294,8 @@ export async function lookAtPhoto(
     fetchImpl: deps.fetchImpl,
     baseUrl: deps.baseUrl,
     signal: deps.signal,
-    temperature: 0.4,
+    temperature: Math.min(0.4, settings.temperature),
+    maxOutputTokens: settings.maxOutputTokens,
   });
   appendMessage({ role: "user", text: asked, withImage: true });
   appendMessage({ role: "sara", text: answer });

@@ -96,9 +96,9 @@ test("forgetting the key removes it", () => {
 /* ------------------------------------------------------------------- requests */
 
 test("the request carries the system instruction, history, key and SSE flag", async () => {
-  let seen: { url: string; body: any } | null = null;
+  let seen: { url: string; body: any; headers: any } | null = null;
   const fetchImpl = (async (url: string, init: any) => {
-    seen = { url: String(url), body: JSON.parse(String(init.body)) };
+    seen = { url: String(url), body: JSON.parse(String(init.body)), headers: init.headers ?? {} };
     return sseResponse([event("Hello")]);
   }) as unknown as typeof fetch;
 
@@ -117,8 +117,11 @@ test("the request carries the system instruction, history, key and SSE flag", as
 
   assert.equal(answer, "Hello");
   assert.ok(seen);
-  assert.match(seen!.url, /models\/gemini-3\.5-flash:streamGenerateContent\?key=/);
-  assert.match(seen!.url, /alt=sse/);
+  // Deliberate change from an earlier version: the key moved out of the URL and
+  // into a header, so it cannot leak through logs or screenshots.
+  assert.match(seen!.url, /models\/gemini-3\.5-flash:streamGenerateContent\?alt=sse$/);
+  assert.doesNotMatch(seen!.url, /AIzaTESTKEY/);
+  assert.equal(seen!.headers["x-goog-api-key"], KEY);
   assert.equal(seen!.body.systemInstruction.parts[0].text, "SYSTEM PROMPT");
   assert.deepEqual(
     seen!.body.contents.map((turn: any) => turn.role),
@@ -448,4 +451,206 @@ test("settings default to the desktop's persona and persist a change", () => {
   const saved = store.loadSettings();
   assert.equal(saved.reality.mode, "strict");
   assert.equal(saved.model, "gemini-3.1-pro-preview");
+});
+
+/* ------------------------------------------------------- transport hardening */
+
+test("the key travels in a header, never in the URL", async () => {
+  reset();
+  let url = "";
+  let headers: any = null;
+  const fetchImpl = (async (target: string, init: any) => {
+    url = String(target);
+    headers = init.headers;
+    return sseResponse([event("Hi")]);
+  }) as unknown as typeof fetch;
+
+  await streamChat({ key: KEY, system: "s", history: [], message: "hello", fetchImpl, onDelta: () => {} });
+
+  assert.equal(headers["x-goog-api-key"], KEY);
+  assert.ok(!url.includes(KEY), "the key must not appear in the URL");
+  assert.match(url, /alt=sse/);
+});
+
+test("a header the server rejects is retried with the query form", async () => {
+  reset();
+  const calls: Array<{ url: string; headers: any }> = [];
+  const fetchImpl = (async (target: string, init: any) => {
+    calls.push({ url: String(target), headers: init.headers });
+    if (calls.length === 1) {
+      return new Response(JSON.stringify({ error: { message: "API key not valid. Please pass a valid API key.", status: "INVALID_ARGUMENT" } }), { status: 403 });
+    }
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "recovered" }] } }] }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const answer = await generate({ key: KEY, system: "s", history: [], message: "hello", fetchImpl });
+
+  assert.equal(answer, "recovered");
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].url, /\?key=/);
+});
+
+test("a dead network is tried twice, then reported with its real cause", async () => {
+  reset();
+  let attempts = 0;
+  const fetchImpl = (async () => {
+    attempts += 1;
+    throw new TypeError("Failed to fetch");
+  }) as unknown as typeof fetch;
+
+  await assert.rejects(
+    () => generate({ key: KEY, system: "s", history: [], message: "hi", fetchImpl }),
+    (error: any) => error instanceof GeminiError && error.code === "OFFLINE" && /Failed to fetch/.test(error.detail),
+  );
+  assert.equal(attempts, 2, "one retry, then stop");
+});
+
+test("a WebView without streams still gets a real answer", async () => {
+  reset();
+  let plainRequests = 0;
+  const fetchImpl = (async (target: string) => {
+    if (String(target).includes(":streamGenerateContent")) {
+      return new Response(null, { status: 200 }); // no body to read
+    }
+    plainRequests += 1;
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "plain answer" }] } }] }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const deltas: string[] = [];
+  const answer = await streamChat({ key: KEY, system: "s", history: [], message: "hi", fetchImpl, onDelta: (d) => deltas.push(d) });
+
+  assert.equal(answer, "plain answer");
+  assert.equal(plainRequests, 1);
+  assert.deepEqual(deltas, ["plain answer"]);
+});
+
+/* -------------------------------------------------------------------- models */
+
+test("the model list keeps only text-capable models and strips the prefix", async () => {
+  reset();
+  const { listModels } = await import("../src/mobile/standalone/gemini");
+  const fetchImpl = (async (target: string) => {
+    assert.match(String(target), /\/models\?pageSize=200/);
+    return new Response(
+      JSON.stringify({
+        models: [
+          { name: "models/gemini-3.5-flash", displayName: "Gemini 3.5 Flash", supportedGenerationMethods: ["generateContent", "countTokens"] },
+          { name: "models/embedding-001", displayName: "Embedding", supportedGenerationMethods: ["embedContent"] },
+          { name: "models/gemini-3.8-flash", supportedGenerationMethods: ["generateContent"] },
+        ],
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+
+  const result = await listModels({ key: KEY, fetchImpl });
+  assert.deepEqual(result.models.map((model: any) => model.id), ["gemini-3.5-flash", "gemini-3.8-flash"]);
+  assert.equal(result.models[0].displayName, "Gemini 3.5 Flash");
+  assert.equal(result.models[1].displayName, "gemini-3.8-flash", "falls back to the id");
+  assert.equal(result.status, 200);
+});
+
+test("the connection probe names the exact step that failed", async () => {
+  reset();
+  const { probeConnection } = await import("../src/mobile/standalone/gemini");
+
+  const offline = await probeConnection({
+    key: KEY,
+    model: "gemini-3.5-flash",
+    fetchImpl: (async () => {
+      throw new TypeError("net::ERR_NAME_NOT_RESOLVED");
+    }) as unknown as typeof fetch,
+  });
+  assert.equal(offline.ok, false);
+  assert.equal(offline.steps[0].state, "ok", "Android still reports a network");
+  assert.equal(offline.steps[1].id, "reach");
+  assert.equal(offline.steps[1].state, "no");
+  assert.match(offline.steps[1].detail, /ERR_NAME_NOT_RESOLVED/);
+
+  const rejected = await probeConnection({
+    key: KEY,
+    fetchImpl: (async () =>
+      new Response(JSON.stringify({ error: { message: "API key not valid", status: "INVALID_ARGUMENT" } }), { status: 403 })) as unknown as typeof fetch,
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.steps.at(-1)?.id, "key");
+  assert.match(rejected.steps.at(-1)!.detail, /API key not valid/);
+});
+
+test("the live probe switches the model when the key does not have it", async () => {
+  reset();
+  const { probeConnection } = await import("../src/mobile/standalone/gemini");
+  const fetchImpl = (async (target: string) => {
+    if (String(target).includes("/models?")) {
+      return new Response(JSON.stringify({ models: [{ name: "models/gemini-3.8-flash", supportedGenerationMethods: ["generateContent"] }] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const result = await probeConnection({ key: KEY, model: "gemini-3.5-flash", live: true, fetchImpl });
+  assert.equal(result.modelKnown, false);
+  assert.equal(result.steps.find((step: any) => step.id === "model")?.state, "warn");
+  assert.equal(result.ok, true, "the key still works with another model");
+  assert.equal(result.steps.at(-1).id, "answer");
+});
+
+/* ------------------------------------------------------------------ customize */
+
+test("customization survives a save, clamps bad values and resets", () => {
+  reset();
+  const defaults = store.loadSettings();
+  assert.equal(defaults.appearance.accent, "cyan");
+  assert.equal(defaults.speech.rate, 1);
+  assert.equal(defaults.streaming, true);
+
+  store.saveSettings({
+    appearance: { ...defaults.appearance, accent: "violet", fontScale: "l", timestamps: true },
+    speech: { ...defaults.speech, rate: 1.35, voiceName: "en-us-x-sfg#female_1-local" },
+    temperature: 9,
+    nickname: "Amol",
+  });
+
+  const saved = store.loadSettings();
+  assert.equal(saved.appearance.accent, "violet");
+  assert.equal(saved.appearance.fontScale, "l");
+  assert.equal(saved.appearance.timestamps, true);
+  assert.equal(saved.speech.rate, 1.35);
+  assert.equal(saved.speech.voiceName, "en-us-x-sfg#female_1-local");
+  assert.equal(saved.temperature, 2, "out-of-range creativity is clamped");
+  assert.equal(saved.nickname, "Amol");
+
+  const restored = store.resetSettings();
+  assert.equal(restored.appearance.accent, "cyan");
+  assert.equal(restored.nickname, "");
+});
+
+test("a half-written settings blob cannot break the app", () => {
+  reset();
+  storage.setItem("sara.mobile.settings.v1", JSON.stringify({ appearance: { accent: "chartreuse" }, speech: { rate: "fast" }, model: 42 }));
+  const loaded = store.loadSettings();
+  assert.equal(loaded.appearance.accent, "cyan", "unknown accent falls back");
+  assert.equal(loaded.speech.rate, 1, "non-numeric rate falls back");
+  assert.equal(loaded.model, "gemini-3.5-flash");
+  assert.equal(loaded.appearance.backdrop, "deep");
+});
+
+test("a failed send can take its message back out of the log", () => {
+  reset();
+  store.appendMessage({ role: "user", text: "hello" });
+  store.appendMessage({ role: "sara", text: "hi" });
+  store.appendMessage({ role: "user", text: "retry me" });
+  assert.equal(store.removeLastMessage("user"), true);
+  assert.deepEqual(store.listMessages().map((message) => message.text), ["hello", "hi"]);
+  assert.equal(store.removeLastMessage("user"), true);
+  assert.equal(store.removeLastMessage("user"), false);
+});
+
+test("erasing everything leaves no key, memory or conversation", () => {
+  reset();
+  saveKey(KEY);
+  store.addMemory("something");
+  store.appendMessage({ role: "user", text: "hello" });
+  store.clearAllData();
+  assert.deepEqual(store.listMemories(), []);
+  assert.deepEqual(store.listMessages(), []);
 });
