@@ -385,6 +385,23 @@ jobs:
           fi
           echo "Sara Mobile APK verified."
 
+      - name: Verify the APK carries the native speech engine
+        run: |
+          set -eu
+          APK=android-mobile/app/build/outputs/apk/debug/app-debug.apk
+          DEX=$(mktemp -d)
+          unzip -o -q "$APK" "classes*.dex" -d "$DEX"
+          if ! grep -aq "SaraVoicePlugin" "$DEX"/*.dex; then
+            echo "::error::The APK does not contain the Text-to-speech plugin, so voice replies would stay silent."
+            exit 1
+          fi
+          if ! grep -aq "com.android.settings.TTS_SETTINGS" "$DEX"/*.dex; then
+            echo "::error::The APK cannot open Android's speech settings, so a missing engine could not be fixed from the app."
+            exit 1
+          fi
+          rm -rf "$DEX"
+          echo "Native speech engine present in the APK."
+
       - name: Upload the standalone APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

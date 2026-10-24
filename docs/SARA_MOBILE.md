@@ -46,6 +46,77 @@ Both can be installed side by side.
 
 Everything is backed by real code paths — there is no mock and no “demo mode”.
 
+## When something does not work
+
+Tap **menu → Self-check**. It now runs the same path a message takes and names
+the step that failed instead of saying "something broke":
+
+| Step | What it proves |
+| --- | --- |
+| Phone network | Android reports a connection |
+| Reach Google | the request completed, with a round-trip time |
+| API key | Google accepted the key, and how many models it can use |
+| Model | the chosen model is in that list — with a fix button if it is not |
+| Answer from the model | a real (tiny) question was answered |
+
+The button runs the last step too; it costs one small request. Failures carry the
+raw reason (for example `net::ERR_NAME_NOT_RESOLVED`, or `HTTP 403: API key not
+valid`), which is what makes a fix possible.
+
+Two transport details that matter in the field:
+
+- the key is sent in the `x-goog-api-key` header, not in the URL, so it cannot
+  leak through logs or screenshots; if a proxy strips the header, the app retries
+  once with `?key=`;
+- a dropped connection is retried once, and a stream that breaks before any text
+  arrives is answered with one plain request instead — a weak network no longer
+  looks like "Sara is broken".
+
+If a send fails, the message is put back in the box (not duplicated in the log)
+and the banner offers **Try again** and **Test connection**.
+
+## Her voice: why "no speech engine" happened
+
+The phone's WebView usually has **no speech synthesis at all** — no
+`window.speechSynthesis`, or one with zero voices. That is what produced
+"No speech engine — replies stay text".
+
+Installing Google Play services does not fix it, and Play services cannot be
+"added" to a web app: it is a system component, and most phones already have it.
+The real fix, which this build ships, is a small native bridge
+(`SaraVoicePlugin.java` in `android-mobile/`) that speaks through **Android's own
+TextToSpeech** — Google Text-to-Speech, Samsung's engine, eSpeak, whatever the
+phone has, including on phones with no Google account at all.
+
+- The app now reports the engine it is really using, by name.
+- If none is installed, **Customize → Android speech settings** opens the exact
+  system screen where one can be installed, and the app says so instead of
+  failing silently.
+- `SaraVoicePlugin` also declares the TTS service in `<queries>` — without that,
+  Android 11+ hides every speech engine from the app.
+- The WebView engine is still there as a fallback, and you can force either one
+  in Customize → Her voice.
+
+## Customize everything
+
+**menu → Settings** is now a full customization surface. Every control changes
+real behaviour:
+
+- **Her brain** — AI key, model (plus *"use only the models my key allows"*, which
+  asks Google and lists them), creativity, longest answer, streaming on/off,
+  how many remembered turns are sent.
+- **Her voice** — read aloud on/off, engine (automatic / Android / WebView), the
+  phone's voice list, speed, pitch, volume, how much of a long answer is read,
+  *Test the voice*, and the Android speech settings shortcut.
+- **How she talks** — six persona profiles, seven trait sliders, three reality
+  modes.
+- **You** — what she calls you, and your own standing instructions, added word for
+  word to every conversation.
+- **Look** — five accent colours, three backgrounds, four text sizes, message
+  timestamps, the emblem, reduced motion, video sound.
+- **Your data** — clear the conversation, forget every memory, reset the settings,
+  or erase the key and everything else (asked twice, never silently).
+
 ## What it deliberately does not do
 
 The app states these in **menu → What this app does** rather than hiding them:
@@ -119,8 +190,10 @@ APK to the `mobile-apk-latest` release.
 - A real Google key was not available here, so **live model answers were not
   verified end to end** — the request/stream/error handling is covered by tests
   against a stub.
-- Speech output uses the phone's engine; some Android builds ship none. The app
-  checks and says so instead of failing silently.
+- The native speech bridge is compiled into the APK and asserted by CI, but it has
+  not been heard on a physical phone here — that check needs your device.
+- Speech output still needs *some* engine installed on the phone. If there is
+  none, the app opens the settings screen that installs one.
 - Reminders are checked while the app is open (every 30 s). An exact-time alarm
   with the app closed would need Android's alarm APIs — not implemented.
 - No background listening, no wake word, no continuous voice session (a
