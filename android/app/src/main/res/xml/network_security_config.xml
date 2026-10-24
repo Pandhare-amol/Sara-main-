@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sara's Android app only talks to a Sara backend over HTTPS.
+  Cleartext is blocked outright: a phone must reach a tunnelled or
+  reverse-proxied HTTPS endpoint, never a bare http:// address.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <!-- The bundled app itself is served from a local https scheme. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">localhost</domain>
+    </domain-config>
+</network-security-config>

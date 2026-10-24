@@ -3,6 +3,7 @@
  * `onboardingComplete`), and again from Settings → System on request.
  * Every step only writes real settings; skipping keeps the safe defaults.
  */
+import { saraFetch } from "../lib/serverConfig";
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowLeft, ArrowRight, Check, Loader2, Sparkles, ShieldCheck, Brain, MonitorSmartphone, PartyPopper } from "lucide-react";
@@ -177,7 +178,7 @@ export function Onboarding({ appSettings, onAppSettingsChange, settings, onChang
                   <Toggle label="Start with Windows" description="Launch quietly when you log in." checked={settings.autoStart}
                     onChange={(v) => {
                       onChange({ autoStart: v });
-                      void fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoStart: v }) }).catch(() => {});
+                      void saraFetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoStart: v }) }).catch(() => {});
                     }} />
                 </>
               )}

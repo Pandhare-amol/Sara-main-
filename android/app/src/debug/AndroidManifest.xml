@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only overlay.
+
+  The debug APK is the build you install to try Sara against the PC on your own
+  Wi-Fi, where the server speaks plain http:// on a LAN address. Release builds
+  keep the main manifest's HTTPS-only rule.
+
+  Nothing else differs: the debug build has no extra permissions.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:usesCleartextTraffic="true"
+        tools:replace="android:usesCleartextTraffic" />
+</manifest>

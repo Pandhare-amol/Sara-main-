@@ -1,3 +1,4 @@
+import { saraFetch } from "./serverConfig";
 /**
  * MYRAA Settings Store — persistent user preferences (V2).
  *
@@ -91,7 +92,7 @@ export function saveSettings(patch: Partial<MyraaSettings>): MyraaSettings {
 /** Push settings to the backend (server.ts persists to settings.json). */
 async function syncSettingsToBackend(settings: MyraaSettings): Promise<void> {
   try {
-    await fetch("/api/settings", {
+    await saraFetch("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),

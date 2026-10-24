@@ -20,7 +20,16 @@ import { voicePrompt, type TaskEventKind } from "../agent/personality";
 import { InputArbiter, ResourceScheduler } from "../agent/scheduler";
 import { publicTaskView, TaskStore, TERMINAL_STATES } from "../agent/taskSession";
 import { UtilityScheduler, type UtilityFired } from "../companion/utilities";
+import { buildCapabilities, capabilitySummary, CapabilityRegistry } from "../capabilities/registry";
+import { registerCapabilityRoutes } from "../capabilities/routes";
+import { CallManager } from "../communication/callManager";
+import { registerCallRoutes } from "../communication/routes";
+import { MessagingHub } from "../communication/messaging/hub";
+import { registerMessagingRoutes } from "../communication/messaging/routes";
+import { readWhatsAppConfig, WhatsAppCloudProvider } from "../communication/messaging/whatsappCloud";
+import { createDeviceGuard, readDeviceToken } from "../shared/deviceAuth";
 import { ContactBook } from "../memory/contacts";
+import { OperationJournal } from "../operations/journal";
 import { WorkingMemory } from "../memory/workingMemory";
 import { ModelRegistry } from "../models/registry";
 import { ModelRouter } from "../models/router";
@@ -58,6 +67,8 @@ export interface RuntimeOptions {
   recall: (query: string, limit: number) => Promise<string[]>;
   /** Extra emergency-stop hooks (legacy tool executor, etc.). */
   onEmergencyStop?: (reason: string) => void;
+  /** Live probe of the Windows desktop agent, supplied by the server. */
+  agentHealth?: () => Promise<{ online: boolean; toolCount?: number | null }>;
   /** Ask the Electron main process to do something (notification, companion). */
   sendToShell?: (message: Record<string, unknown>) => void;
   legacySettings?: Record<string, unknown>;
@@ -80,6 +91,11 @@ export class MyraaRuntime {
   readonly perception: PerceptionEngine;
   readonly downloads: DownloadManager;
   readonly contacts: ContactBook;
+  readonly calls: CallManager;
+  readonly operations: OperationJournal;
+  readonly messaging: MessagingHub;
+  readonly capabilities = new CapabilityRegistry();
+  private readonly deviceToken: string | null = readDeviceToken();
   readonly working = new WorkingMemory();
   readonly audit: AuditLog;
   readonly executor: ActionExecutor;
@@ -115,6 +131,33 @@ export class MyraaRuntime {
     });
     this.contacts = new ContactBook(dataDir);
     this.audit = new AuditLog(dataDir);
+    this.operations = new OperationJournal({ dataDir });
+    // Phone events arrive from an authorised device; the manager owns call
+    // state, the answering policy and the command queue for that device.
+    this.calls = new CallManager({
+      dataDir,
+      contacts: this.contacts,
+      audit: this.audit,
+      confirmations: this.confirmations,
+      settings: () => this.currentSettings,
+      presence: () => {
+        // Reuse the existing presence engine instead of inventing a second one:
+        // DND reports why it engaged ("meeting", "fullscreen", "manual"…).
+        const dnd = this.conversation.dnd;
+        const inMeeting = /meeting|call/i.test(dnd.auto || "");
+        return { inMeeting, focusMode: dnd.active && !inMeeting };
+      },
+      notify: (payload) => this.notify(payload.title, payload.body),
+    });
+
+    // Messaging providers: only official APIs. A provider that is not
+    // configured reports NOT_SUPPORTED instead of pretending to send.
+    this.messaging = new MessagingHub({
+      dataDir,
+      audit: this.audit,
+      confirmations: this.confirmations,
+      providers: [new WhatsAppCloudProvider(readWhatsAppConfig())],
+    });
     this.executor = new ActionExecutor({
       call: options.callAgent,
       perception: this.perception,
@@ -125,6 +168,7 @@ export class MyraaRuntime {
       downloads: this.downloads,
       contacts: this.contacts,
       audit: this.audit,
+      journal: this.operations,
       remember: (fact, kind) => options.remember(fact, kind === "preference" ? "preference" : "semantic", 0.7),
       notify: (title, body) => this.notify(title, body),
       conflictWaitMs: this.currentSettings.autonomy.conflictWaitSec * 1000,
@@ -161,10 +205,13 @@ export class MyraaRuntime {
     this.currentSettings = await this.settings.initialize(this.options.legacySettings);
     await Promise.all([
       this.registry.initialize(),
+      this.operations.initialize(),
       this.permissions.initialize(),
       this.tasks.initialize(),
       this.downloads.initialize(),
       this.contacts.initialize(),
+      this.calls.initialize(),
+      this.messaging.initialize(),
       this.poses.initialize(),
     ]);
     this.missedUtilities = await this.utilities.initialize();
@@ -372,8 +419,58 @@ export class MyraaRuntime {
   emergencyStop(reason: string): number {
     const count = this.manager.stopAll(reason);
     rootScope.cancelChildren(reason);
+    // Live calls and queued phone commands must not outlive a stop.
+    void this.calls.stop(reason).catch(() => {});
     this.audit.record(null, "system", `Emergency stop (${reason})`);
     return count;
+  }
+
+  /** Desktop agent health, cached for 5 s. Never throws. */
+  private healthCache: { at: number; value: { online: boolean; toolCount: number | null } } | null = null;
+  desktopHealthSnapshot(): { online: boolean; toolCount: number | null } {
+    const now = Date.now();
+    if (this.healthCache && now - this.healthCache.at < 5_000) return this.healthCache.value;
+    if (!this.healthCache) {
+      this.healthCache = { at: 0, value: { online: false, toolCount: null } };
+      void this.refreshDesktopHealth();
+    }
+    return this.healthCache.value;
+  }
+
+  private async refreshDesktopHealth(): Promise<void> {
+    const probe = this.options.agentHealth;
+    let value: { online: boolean; toolCount: number | null } = { online: false, toolCount: null };
+    if (probe) {
+      try {
+        const result = await probe();
+        value = { online: Boolean(result.online), toolCount: typeof result.toolCount === "number" ? result.toolCount : null };
+      } catch {
+        value = { online: false, toolCount: null };
+      }
+    }
+    this.healthCache = { at: Date.now(), value };
+  }
+
+  /** Capability catalogue for the UI and the model. */
+  capabilityCatalogue() {
+    return buildCapabilities({
+      desktop: this.desktopHealthSnapshot(),
+      devices: this.capabilities.list(),
+      server: {
+        hasGeminiKey: Boolean(this.options.getSecret("provider:gemini")),
+        visionEnabled: Boolean(this.options.getSecret("provider:gemini")),
+        callsEnabled: this.currentSettings.calls.enabled,
+        deviceTokenConfigured: Boolean(this.deviceToken),
+        messagingProviders: this.messaging.providerStatuses(),
+        memoryReady: true,
+        voiceAvailable: Boolean(this.options.getSecret("provider:gemini")),
+      },
+    });
+  }
+
+  /** Instruction fragment listing what is actually usable right now. */
+  capabilityInstructions(): string {
+    return capabilitySummary(this.capabilityCatalogue());
   }
 
   // ---- Electron main-process messages ------------------------------------------------
@@ -477,6 +574,90 @@ export class MyraaRuntime {
         if (!res.headersSent) res.status(status).json({ error: error instanceof ModelError ? error.userMessage : error instanceof Error ? error.message : String(error) });
       }
     };
+
+    // ---- operation receipts and undo -------------------------------------------
+    app.get("/api/operations", wrap((req) => {
+      const limit = Number(req.query.limit) || 50;
+      const taskId = typeof req.query.taskId === "string" ? req.query.taskId : undefined;
+      return { operations: this.operations.list(limit, taskId) };
+    }));
+
+    app.get("/api/operations/:id", wrap((req) => {
+      const operation = this.operations.get(String(req.params.id));
+      if (!operation) {
+        const error = new Error("That operation is not in Sara's journal.");
+        (error as { status?: number }).status = 404;
+        throw error;
+      }
+      return { operation };
+    }));
+
+    app.post("/api/operations/:id/undo", wrap(async (req) => {
+      const id = String(req.params.id);
+      if (!this.operations.get(id)) {
+        const error = new Error("That operation is not in Sara's journal.");
+        (error as { status?: number }).status = 404;
+        throw error;
+      }
+      const claimed = await this.operations.beginUndo(id);
+      if (!claimed) {
+        const error = new Error("That action cannot be undone from here.");
+        (error as { status?: number }).status = 409;
+        throw error;
+      }
+      const scope = rootScope.child("undo");
+      const timer = setTimeout(() => scope.cancel("undo_timeout"), 120_000);
+      timer.unref?.();
+      try {
+        const result = await this.executor.execute(
+          { tool: claimed.action.tool, args: claimed.action.args },
+          { taskId: `undo:${claimed.record.id}`, goal: `Undo: ${claimed.action.label}`, state: null, scope },
+        );
+        const undoOperationId = this.operations.list(5).find((item) => item.taskId === `undo:${claimed.record.id}`)?.id ?? null;
+        await this.operations.settleUndo(claimed.record.id, result.ok, undoOperationId);
+        this.audit.record(null, "recovery", `Undo ${result.ok ? "completed" : "failed"}: ${claimed.action.label}`);
+        return { ok: result.ok, label: claimed.action.label, result };
+      } catch (error) {
+        await this.operations.settleUndo(claimed.record.id, false, null);
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }));
+
+    const device = createDeviceGuard(this.deviceToken);
+
+    registerCallRoutes(app, {
+      calls: this.calls,
+      settings: () => this.currentSettings,
+      updateCallsSettings: (patch) => this.settings.update({ calls: patch }),
+      deviceToken: this.deviceToken,
+    });
+
+    registerMessagingRoutes(app, {
+      hub: this.messaging,
+      whatsapp: readWhatsAppConfig(),
+      appSecret: (process.env.WHATSAPP_APP_SECRET || "").trim() || null,
+    });
+
+    registerCapabilityRoutes(app, {
+      registry: this.capabilities,
+      device,
+      server: () => ({
+        // The probe result is cached for a few seconds: the capabilities
+        // endpoint is read by the UI and the prompt, not by the agent loop.
+        desktop: this.desktopHealthSnapshot(),
+        server: {
+          hasGeminiKey: Boolean(this.options.getSecret("provider:gemini")),
+          visionEnabled: Boolean(this.options.getSecret("provider:gemini")),
+          callsEnabled: this.currentSettings.calls.enabled,
+          deviceTokenConfigured: Boolean(this.deviceToken),
+          messagingProviders: this.messaging.providerStatuses(),
+          memoryReady: true,
+          voiceAvailable: Boolean(this.options.getSecret("provider:gemini")),
+        },
+      }),
+    });
 
     app.use("/user-characters", express.static(this.characters.root, { fallthrough: true, index: false, dotfiles: "deny" }));
 

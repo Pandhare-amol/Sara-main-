@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Sara Mobile</string>
+    <string name="title_activity_main">Sara Mobile</string>
+    <string name="package_name">ai.sara.mobile</string>
+    <string name="custom_url_scheme">ai.sara.mobile</string>
+</resources>

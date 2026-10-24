@@ -10,6 +10,10 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { readJsonFile, writeJsonFile } from "../shared/jsonFile";
 
+export type ContactRelationship = "family" | "friend" | "business" | "colleague" | "service" | "unknown";
+
+export type ContactPriorityLevel = "high" | "normal" | "low";
+
 export interface Contact {
   id: string;
   /** How the user refers to them / default display name. */
@@ -18,6 +22,11 @@ export interface Contact {
   /** Exact name as shown inside specific apps, e.g. { whatsapp: "Papa ❤️" }. */
   appNames: Record<string, string>;
   notes?: string;
+  /** Phone numbers as the user entered them; matching is by digit suffix. */
+  phones?: string[];
+  relationship?: ContactRelationship;
+  organization?: string;
+  priority?: ContactPriorityLevel;
   createdAt: string;
   updatedAt: string;
   lastUsedAt?: string;
@@ -37,6 +46,15 @@ const KINSHIP: string[][] = [
   ["papa", "dad", "daddy", "father", "pitaji", "pappa", "abbu"],
   ["mummy", "mom", "mommy", "mother", "maa", "mumma", "ammi", "mum"],
 ];
+
+/** Digits only, for phone matching. Never used to dial. */
+export function phoneDigits(value: string): string {
+  return String(value || "").replace(/\D+/g, "");
+}
+
+function cleanPhones(values: string[]): string[] {
+  return [...new Set(values.map((value) => String(value).trim()).filter((value) => phoneDigits(value).length >= 7))].slice(0, 8);
+}
 
 export function normalizeAlias(value: string): string {
   return value
@@ -70,7 +88,18 @@ export class ContactBook {
     return this.contacts.find((contact) => contact.id === id);
   }
 
-  async upsert(input: { id?: string; displayName: string; aliases?: string[]; appNames?: Record<string, string>; notes?: string; expandKinship?: boolean }): Promise<Contact> {
+  async upsert(input: {
+    id?: string;
+    displayName: string;
+    aliases?: string[];
+    appNames?: Record<string, string>;
+    notes?: string;
+    expandKinship?: boolean;
+    phones?: string[];
+    relationship?: ContactRelationship;
+    organization?: string;
+    priority?: ContactPriorityLevel;
+  }): Promise<Contact> {
     const now = new Date().toISOString();
     const displayName = input.displayName.trim();
     if (!displayName) throw new Error("Contact name is required.");
@@ -86,6 +115,10 @@ export class ContactBook {
       existing.aliases = [...new Set([...existing.aliases, ...aliases])];
       existing.appNames = { ...existing.appNames, ...(input.appNames || {}) };
       if (input.notes !== undefined) existing.notes = input.notes;
+      if (input.phones !== undefined) existing.phones = cleanPhones(input.phones);
+      if (input.relationship !== undefined) existing.relationship = input.relationship;
+      if (input.organization !== undefined) existing.organization = input.organization;
+      if (input.priority !== undefined) existing.priority = input.priority;
       existing.updatedAt = now;
       await this.save();
       return structuredClone(existing);
@@ -96,6 +129,10 @@ export class ContactBook {
       aliases,
       appNames: input.appNames || {},
       notes: input.notes,
+      ...(input.phones !== undefined ? { phones: cleanPhones(input.phones) } : {}),
+      ...(input.relationship !== undefined ? { relationship: input.relationship } : {}),
+      ...(input.organization !== undefined ? { organization: input.organization } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -124,6 +161,30 @@ export class ContactBook {
     if (partial.length === 1) return { status: "resolved", contact: structuredClone(partial[0]), matchedAlias: wanted };
     if (partial.length > 1) return { status: "ambiguous", candidates: partial.map((contact) => structuredClone(contact)) };
     return { status: "unknown", query };
+  }
+
+  /**
+   * Find a contact by phone number.
+   *
+   * Numbers are compared on their trailing digits so "+91 98765 43210",
+   * "09876543210" and "9876543210" match. A tie returns undefined rather than
+   * guessing which person is calling.
+   */
+  findByPhone(raw: string): Contact | undefined {
+    const wanted = phoneDigits(raw);
+    if (wanted.length < 7) return undefined;
+    const matches = this.contacts.filter((contact) =>
+      (contact.phones || []).some((phone) => {
+        const digits = phoneDigits(phone);
+        if (digits.length < 7) return false;
+        // Numbers of 10+ digits are compared on their last 10, so "+91 98765
+        // 43210", "09876543210" and "9876543210" all match without pretending
+        // to be a full E.164 normaliser.
+        const compare = digits.length >= 10 && wanted.length >= 10 ? 10 : Math.min(digits.length, wanted.length);
+        return digits.slice(-compare) === wanted.slice(-compare);
+      }),
+    );
+    return matches.length === 1 ? structuredClone(matches[0]) : undefined;
   }
 
   /** Name to search for inside a specific app. */

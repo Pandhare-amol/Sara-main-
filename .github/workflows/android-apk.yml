@@ -1,0 +1,573 @@
+# Build Sara's Android APK on a GitHub-hosted runner.
+#
+# No Android Studio is required on any laptop: this workflow installs Node,
+# Java and the Android SDK, builds the web app, syncs Capacitor and compiles
+# the APK. The APK is uploaded as a downloadable artifact.
+#
+# Triggers:
+#   - manual (Actions → "Android APK" → Run workflow)
+#   - pushes that touch the app, the Android project or this workflow
+#   - tags starting with v (e.g. v1.5.2)
+name: Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "APK type"
+        type: choice
+        options: [debug, release]
+        default: debug
+      build_release_signing:
+        description: "Also build a signed release (requires signing secrets)"
+        type: boolean
+        default: false
+  push:
+    branches: [main, "arena/**"]
+    tags: ["v*"]
+    paths:
+      - "src/**"
+      - "android/**"
+      - "android-mobile/**"
+      - "mobile.html"
+      - "vite.mobile.config.ts"
+      - "capacitor.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - "index.html"
+      - "public/**"
+      - ".github/workflows/android-apk.yml"
+
+permissions:
+  contents: write   # the debug APK is also published to a rolling prerelease
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-checks:
+    name: Web build, types and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies from the lockfile
+        run: npm ci --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: TypeScript checks
+        run: npm run lint
+
+      - name: Unit tests (agent, characters, remote access, mobile, persona, calls, capabilities, operations, standalone)
+        run: |
+          npm run test:agent
+          npm run test:characters
+          npm run test:remote-access
+          npm run test:mobile
+          npm run test:persona
+          npm run test:calls
+          npm run test:capabilities
+          npm run test:operations
+          npm run test:standalone
+
+      - name: UI smoke tests (phone shell, desktop shell, standalone app)
+        run: npm run test:ui
+
+      - name: Production web build
+        run: npm run build:web
+
+      - name: Verify no credentials reached the bundle
+        run: npm run check:bundle-secrets
+
+      - name: Verify the build output is deployable
+        run: |
+          set -eu
+          test -f dist/index.html
+          test -f dist/manifest.webmanifest
+          test -d dist/assets
+          echo "Built files: $(find dist -type f | wc -l)"
+          echo "Bundle size: $(du -sh dist | cut -f1)"
+
+      - name: Build the standalone Sara Mobile bundle
+        run: npm run build:mobile
+
+      - name: Upload web build (for deployment or inspection)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sara-web-build
+          path: dist
+          retention-days: 14
+          if-no-files-found: error
+
+  apk:
+    name: Build APK
+    needs: web-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies from the lockfile
+        run: npm ci --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Set up Java 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Configure the preinstalled Android SDK
+        run: |
+          set -eu
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK" ]; then
+            echo "::error::No Android SDK at $SDK"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "SDK: $SDK"
+          ls "$SDK"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Install the Android platform and build tools
+        run: |
+          set -eu
+          SDKMANAGER="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+          "$SDKMANAGER" --version
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager --list_installed | head -30
+
+      - name: Build the web app for the APK
+        run: npm run build:web
+
+      - name: Verify no credentials reached the bundle
+        run: npm run check:bundle-secrets
+
+      - name: Sync Capacitor (copies dist into the Android project)
+        run: npx cap sync android
+
+      - name: Confirm the APK bundles local assets, not a dev server
+        run: |
+          set -eu
+          CONFIG=android/app/src/main/assets/capacitor.config.json
+          test -f "$CONFIG"
+          if grep -Eq '"url"[[:space:]]*:' "$CONFIG"; then
+            echo "::error::capacitor.config.json contains a server URL; release APKs must bundle local assets."
+            exit 1
+          fi
+          test -f android/app/src/main/assets/public/index.html
+          grep -q '"cleartext": false' "$CONFIG"
+          echo "Capacitor config OK:"
+          cat "$CONFIG"
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Verify the debug APK exists and is installable
+        run: |
+          set -eu
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK" || { echo "::error::Debug APK was not produced."; exit 1; }
+          SIZE=$(stat -c%s "$APK")
+          echo "APK size: $SIZE bytes"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::APK is suspiciously small ($SIZE bytes)."
+            exit 1
+          fi
+          unzip -l "$APK" | head -20
+          unzip -l "$APK" | grep -q "AndroidManifest.xml"
+          unzip -l "$APK" | grep -q "classes.dex"
+          unzip -l "$APK" | grep -q "assets/public/index.html"
+          echo "APK contents verified."
+
+      # The phone reaches `npm run phone` over plain http on a LAN address, so the
+      # debug APK must permit cleartext. Read that back out of the built APK
+      # instead of trusting the source files.
+      #
+      # On API 24+ the networkSecurityConfig resource wins over the manifest flag,
+      # so either a true flag or a permitting config is sufficient; if neither is
+      # present the build fails, because the phone could not connect.
+      - name: Verify the debug APK permits LAN http
+        run: |
+          set -eu
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          AAPT=$(ls "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/aapt2 2>/dev/null | tail -1 || true)
+          if [ -z "${AAPT:-}" ]; then
+            echo "::warning::aapt2 not found; could not verify the cleartext setting."
+            exit 0
+          fi
+
+          "$AAPT" dump xmltree --file AndroidManifest.xml "$APK" > manifest.txt
+          "$AAPT" dump xmltree --file res/xml/network_security_config.xml "$APK" > nsc.txt 2>/dev/null || true
+
+          # aapt2 prints booleans as `=true` (older builds print a 0xffffffff int).
+          echo "manifest:"; grep -i "cleartext" manifest.txt | head -3 || true
+          echo "network config:"; grep -i "cleartext" nsc.txt | head -3 || true
+
+          MANIFEST_OK=0
+          if grep -qiE "usesCleartextTraffic.*(=true|0xffffffff)" manifest.txt; then MANIFEST_OK=1; fi
+          NSC_OK=0
+          if grep -qiE "cleartextTrafficPermitted.*(=true|0xffffffff)" nsc.txt; then NSC_OK=1; fi
+
+          if [ "$MANIFEST_OK" = "1" ] || [ "$NSC_OK" = "1" ]; then
+            echo "Cleartext http allowed in this debug APK (manifest=$MANIFEST_OK, network config=$NSC_OK)."
+          else
+            echo "::error::Debug APK blocks cleartext http (manifest=$MANIFEST_OK, network config=$NSC_OK); the phone could not reach npm run phone."
+            exit 1
+          fi
+          rm -f manifest.txt nsc.txt
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sara-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      # Artifacts expire and need a GitHub login to fetch; a prerelease asset is
+      # a plain download link the installer can open on the phone.
+      - name: Publish the test APK to the rolling prerelease
+        if: github.event_name == 'push' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view apk-latest >/dev/null 2>&1 ||             gh release create apk-latest               --title "Sara test APK"               --notes "Rolling debug build for trying Sara on a phone. Updated by CI on every push."               --prerelease
+          cp android/app/build/outputs/apk/debug/app-debug.apk "sara-debug-${GITHUB_SHA::7}.apk"
+          gh release upload apk-latest "sara-debug-${GITHUB_SHA::7}.apk" --clobber
+          echo "APK: https://github.com/${GITHUB_REPOSITORY}/releases/tag/apk-latest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write build summary
+        if: always()
+        run: |
+          {
+            echo "## Android APK build"
+            echo ""
+            echo "- Package: \`ai.sara.companion\`"
+            echo "- Runner: ${{ runner.os }} / JDK 21 / Android 35"
+            if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
+              echo "- Debug APK: $(du -h android/app/build/outputs/apk/debug/app-debug.apk | cut -f1) — artifact **sara-debug-apk**"
+              echo "- Install: enable \"install unknown apps\", copy the APK to the phone, tap to install."
+            else
+              echo "- **The APK was not produced — check the Gradle log above.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  mobile-apk:
+    name: Build Sara Mobile APK (standalone)
+    needs: web-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies from the lockfile
+        run: npm ci --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Set up Java 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Configure the preinstalled Android SDK
+        run: |
+          set -eu
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK" ]; then
+            echo "::error::No Android SDK at $SDK"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Install the Android platform and build tools
+        run: |
+          set -eu
+          SDKMANAGER="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      # Builds dist-mobile, refuses to continue if the standalone bundle picked
+      # up a server dependency, then copies the assets into android-mobile.
+      - name: Build and sync the standalone app
+        run: npm run mobile:sync
+
+      - name: Verify no credentials reached the standalone bundle
+        run: npm run check:bundle-secrets:mobile
+
+      - name: Confirm the app bundles local assets with its own identity
+        run: |
+          set -eu
+          CONFIG=android-mobile/app/src/main/assets/capacitor.config.json
+          test -f "$CONFIG"
+          test -f android-mobile/app/src/main/assets/public/index.html
+          grep -q '"appId": "ai.sara.mobile"' "$CONFIG"
+          if grep -Eq '"url"[[:space:]]*:' "$CONFIG"; then
+            echo "::error::capacitor.config.json points at a dev server."
+            exit 1
+          fi
+          grep -q 'applicationId "ai.sara.mobile"' android-mobile/app/build.gradle
+          grep -q 'Sara Mobile' android-mobile/app/src/main/res/values/strings.xml
+          echo "Standalone project identity verified."
+          cat "$CONFIG"
+
+      - name: Build the standalone debug APK
+        working-directory: android-mobile
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Verify the APK is installable and is the mobile app
+        run: |
+          set -eu
+          APK=android-mobile/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK" || { echo "::error::Sara Mobile APK was not produced."; exit 1; }
+          SIZE=$(stat -c%s "$APK")
+          echo "APK size: $SIZE bytes"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::APK is suspiciously small ($SIZE bytes)."
+            exit 1
+          fi
+          unzip -l "$APK" | grep -q "AndroidManifest.xml"
+          unzip -l "$APK" | grep -q "classes.dex"
+          unzip -l "$APK" | grep -q "assets/public/index.html"
+
+          AAPT=$(ls "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/aapt2 2>/dev/null | tail -1 || true)
+          if [ -n "${AAPT:-}" ]; then
+            "$AAPT" dump badging "$APK" | head -3
+            "$AAPT" dump badging "$APK" | grep -q "package: name='ai.sara.mobile'" || {
+              echo "::error::The APK is not the separate Sara Mobile app."
+              exit 1
+            }
+            "$AAPT" dump badging "$APK" | grep -q "application-label:'Sara Mobile'" || {
+              echo "::error::The APK is not labelled Sara Mobile."
+              exit 1
+            }
+          fi
+          echo "Sara Mobile APK verified."
+
+      - name: Verify the APK carries the native speech engine
+        run: |
+          set -eu
+          APK=android-mobile/app/build/outputs/apk/debug/app-debug.apk
+          DEX=$(mktemp -d)
+          unzip -o -q "$APK" "classes*.dex" -d "$DEX"
+          if ! grep -aq "SaraVoicePlugin" "$DEX"/*.dex; then
+            echo "::error::The APK does not contain the Text-to-speech plugin, so voice replies would stay silent."
+            exit 1
+          fi
+          if ! grep -aq "com.android.settings.TTS_SETTINGS" "$DEX"/*.dex; then
+            echo "::error::The APK cannot open Android's speech settings, so a missing engine could not be fixed from the app."
+            exit 1
+          fi
+          rm -rf "$DEX"
+          echo "Native speech engine present in the APK."
+
+      - name: Upload the standalone APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sara-mobile-apk
+          path: android-mobile/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish the standalone APK to its own rolling prerelease
+        if: github.event_name == 'push' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view mobile-apk-latest >/dev/null 2>&1 || \
+            gh release create mobile-apk-latest \
+              --title "Sara Mobile (standalone) test APK" \
+              --notes "Standalone Sara Mobile — runs on the phone with your own AI key. Separate app from the PC client." \
+              --prerelease
+          cp android-mobile/app/build/outputs/apk/debug/app-debug.apk "sara-mobile-${GITHUB_SHA::7}.apk"
+          gh release upload mobile-apk-latest "sara-mobile-${GITHUB_SHA::7}.apk" --clobber
+          echo "Sara Mobile APK: https://github.com/${GITHUB_REPOSITORY}/releases/tag/mobile-apk-latest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write build summary
+        if: always()
+        run: |
+          {
+            echo "## Sara Mobile (standalone) APK"
+            echo ""
+            echo "- Package: \`ai.sara.mobile\` (separate from \`ai.sara.companion\`)"
+            echo "- Runs on the phone with the user's own AI key; no Sara server involved."
+            if [ -f android-mobile/app/build/outputs/apk/debug/app-debug.apk ]; then
+              echo "- Debug APK: $(du -h android-mobile/app/build/outputs/apk/debug/app-debug.apk | cut -f1) — artifact **sara-mobile-apk**"
+            else
+              echo "- **The APK was not produced — check the Gradle log above.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Signed release APK (optional)
+    needs: web-checks
+    if: |
+      (github.event_name == 'workflow_dispatch' && (inputs.build_type == 'release' || inputs.build_release_signing)) ||
+      startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SARA_KEYSTORE_FILE: ${{ secrets.SARA_KEYSTORE_FILE }}
+      SARA_KEYSTORE_PASSWORD: ${{ secrets.SARA_KEYSTORE_PASSWORD }}
+      SARA_KEY_ALIAS: ${{ secrets.SARA_KEY_ALIAS }}
+      SARA_KEY_PASSWORD: ${{ secrets.SARA_KEY_PASSWORD }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check signing configuration
+        id: signing
+        run: |
+          if [ -z "${SARA_KEYSTORE_FILE:-}" ] || [ -z "${SARA_KEYSTORE_PASSWORD:-}" ] || [ -z "${SARA_KEY_ALIAS:-}" ] || [ -z "${SARA_KEY_PASSWORD:-}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets are not configured; only the debug APK will be produced."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets detected."
+          fi
+
+      - name: Set up Node.js
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.signing.outputs.configured == 'true'
+        run: npm ci --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Set up Java 21
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Configure the preinstalled Android SDK
+        if: steps.signing.outputs.configured == 'true'
+        run: |
+          set -eu
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          test -d "$SDK" || { echo "::error::No Android SDK at $SDK"; exit 1; }
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Install the Android platform and build tools
+        if: steps.signing.outputs.configured == 'true'
+        run: |
+          set -eu
+          SDKMANAGER="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Decode the keystore
+        if: steps.signing.outputs.configured == 'true'
+        run: |
+          set -eu
+          FILE="$RUNNER_TEMP/sara-release.keystore"
+          printf '%s' "$SARA_KEYSTORE_FILE" | base64 --decode > "$FILE"
+          test -s "$FILE" || { echo "::error::Decoded keystore is empty."; exit 1; }
+          echo "SARA_KEYSTORE_FILE=$FILE" >> "$GITHUB_ENV"
+          echo "Keystore decoded to a temporary path (contents never printed)."
+
+      - name: Build the web app and sync Capacitor
+        if: steps.signing.outputs.configured == 'true'
+        run: |
+          npm run build:web
+          npm run check:bundle-secrets
+          npx cap sync android
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.configured == 'true'
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleRelease
+
+      - name: Verify the signed APK
+        if: steps.signing.outputs.configured == 'true'
+        run: |
+          set -eu
+          APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          test -n "$APK" || { echo "::error::No release APK produced."; exit 1; }
+          echo "Release APK: $APK ($(stat -c%s "$APK") bytes)"
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" > /tmp/apksigner.txt || {
+            echo "::error::Release APK is not signed."
+            exit 1
+          }
+          grep -E "Signer #1 certificate DN|Signer #1 certificate SHA-256 digest" /tmp/apksigner.txt
+          unzip -l "$APK" | grep -q "assets/public/index.html"
+          echo "RELEASE_APK=$APK" >> "$GITHUB_ENV"
+
+      - name: Upload signed release APK
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sara-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Explain why no release APK was built
+        if: steps.signing.outputs.configured != 'true'
+        run: |
+          {
+            echo "## Signed release APK skipped"
+            echo ""
+            echo "Add these repository secrets to enable signed release builds:"
+            echo ""
+            echo "- \`SARA_KEYSTORE_FILE\` — base64 of your .keystore"
+            echo "- \`SARA_KEYSTORE_PASSWORD\`"
+            echo "- \`SARA_KEY_ALIAS\`"
+            echo "- \`SARA_KEY_PASSWORD\`"
+            echo ""
+            echo "Until then, use the debug APK from the **apk** job (installable, but not publishable)."
+          } >> "$GITHUB_STEP_SUMMARY"

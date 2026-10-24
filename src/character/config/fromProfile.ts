@@ -6,6 +6,7 @@
  * feel, idle timing) is inherited from the built-in character so every
  * imported model gets the same polished anime rendering without hand tuning.
  */
+import { assetUrl } from '../../lib/serverConfig';
 import type { CharacterProfile } from '@/shared/character/profile';
 import type { BoneMap, CharacterConfig, MaterialRoleMap, MorphMap } from './types';
 
@@ -82,8 +83,10 @@ export function configFromProfile(profile: CharacterProfile, base: CharacterConf
     ...base,
     id: profile.id,
     displayName: profile.displayName,
-    modelUrl: `/user-characters/${encodeURIComponent(profile.id)}/${profile.model.file}`,
-    textureMapUrl: `/user-characters/${encodeURIComponent(profile.id)}/${profile.model.textureMap}`,
+    // Absolute (and, on a remote server, token-bearing) URLs so the phone
+    // can stream the model from the PC instead of its own origin.
+    modelUrl: assetUrl(`/user-characters/${encodeURIComponent(profile.id)}/${profile.model.file}`),
+    textureMapUrl: assetUrl(`/user-characters/${encodeURIComponent(profile.id)}/${profile.model.textureMap}`),
     scale: profile.scale,
     groundOffset: profile.groundOffset,
     bones,

@@ -38,6 +38,12 @@ interface MyraaCoreVisualizerProps {
   reflectionStrength?: number;
   /** Character to show (built-in or imported); undefined = default. */
   characterId?: string;
+  /** Skip particle animation and character controls (mobile battery saver / reduced motion). */
+  reducedMotion?: boolean;
+  /** Touch-friendly: no keyboard hints, no cloth dragging. */
+  touch?: boolean;
+  /** Hide the "import a character" panel (mobile shows its own placeholder). */
+  quietEmptyState?: boolean;
 }
 
 /** Cinematic accent colours per theme. */
@@ -68,6 +74,9 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
   characterState,
   reflectionStrength = 1,
   characterId,
+  reducedMotion = false,
+  touch = false,
+  quietEmptyState = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
@@ -106,7 +115,7 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
     let height = (canvas.height = canvas.offsetHeight);
 
     const generateParticles = () => {
-      const count = Math.min(60, Math.floor(width / 24));
+      const count = reducedMotion ? 10 : Math.min(60, Math.floor(width / 24));
       particlesRef.current = Array.from({ length: count }, () => ({
         x: Math.random() * width,
         y: Math.random() * height + height * 0.1,
@@ -182,7 +191,9 @@ export const MyraaCoreVisualizer: React.FC<MyraaCoreVisualizerProps> = ({
         ctx.fill();
       }
 
-      animationRef.current = requestAnimationFrame(render);
+      // Reduced motion: draw one static frame (the projector beam and dust
+      // still give depth) and never schedule more work.
+      if (!reducedMotion) animationRef.current = requestAnimationFrame(render);
     };
 
     render();

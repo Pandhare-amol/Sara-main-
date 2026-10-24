@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug build only (this file overrides app/src/main/res/xml of the same name).
+
+  Plain HTTP is allowed so the test APK can reach `npm run phone` on the PC over
+  the local network. Release builds use the main config and stay HTTPS-only.
+  The access token still travels with every request — keep this build on a
+  network you trust.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

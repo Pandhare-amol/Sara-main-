@@ -17,6 +17,7 @@ import type { PermissionEngine } from "../../permissions/engine";
 import { CAPABILITY_INFO, type Capability, type PermissionContext } from "../../permissions/types";
 import { validateJson } from "../../shared/jsonSchema";
 import { summarizeArgs } from "../../shared/redact";
+import type { OperationJournal } from "../../operations/journal";
 import type { AuditLog } from "../audit";
 import { CancelledError, type CancellationScope } from "../cancellation";
 import type { DownloadManager } from "../downloads";
@@ -72,6 +73,8 @@ export interface ExecutorDeps {
   downloads: DownloadManager;
   contacts: ContactBook;
   audit: AuditLog;
+  /** Receipts + undo descriptors for every executed action. */
+  journal?: OperationJournal;
   remember: (fact: string, kind: string) => Promise<void>;
   notify: (title: string, body: string) => void;
   /** Seconds to wait for the user to stop using the mouse before yielding. */
@@ -123,7 +126,33 @@ export class ActionExecutor {
     return ACTION_MAP.get(tool);
   }
 
+  /**
+   * Execute one action, recording a receipt around it.
+   *
+   * The journal never changes the result: it records what the executor already
+   * decided, including whether verification passed.
+   */
   async execute(action: PlannedAction, context: ActionContext): Promise<ActionResult> {
+    const journal = this.deps.journal;
+    const operationId = journal?.start({ tool: action.tool, args: (action.args || {}) as Record<string, unknown>, taskId: context.taskId ?? null });
+    try {
+      const result = await this.executeInner(action, context);
+      if (operationId) await journal?.finish(operationId, result).catch(() => null);
+      return result;
+    } catch (error) {
+      if (operationId) {
+        await journal?.finish(operationId, {
+          ok: false,
+          tool: action.tool,
+          summary: "Action threw an exception",
+          error: error instanceof Error ? error.message : String(error),
+        }).catch(() => null);
+      }
+      throw error;
+    }
+  }
+
+  private async executeInner(action: PlannedAction, context: ActionContext): Promise<ActionResult> {
     const started = Date.now();
     const definition = ACTION_MAP.get(action.tool);
     const fail = (category: FailureCategory, error: string, summary = "Action failed"): ActionResult => ({

@@ -1,0 +1,20 @@
+// Capacitor plugin wiring for the standalone Sara Mobile app.
+//
+// Unlike the client app's copy, this project has no Cordova plugin module, so
+// the generated `cordova.variables.gradle` apply is intentionally absent — that
+// file only exists after `cap sync`, which this project does not run.
+android {
+  compileOptions {
+      sourceCompatibility JavaVersion.VERSION_21
+      targetCompatibility JavaVersion.VERSION_21
+  }
+}
+
+dependencies {
+    implementation project(':capacitor-app')
+    implementation project(':capacitor-status-bar')
+}
+
+if (hasProperty('postBuildExtras')) {
+  postBuildExtras()
+}

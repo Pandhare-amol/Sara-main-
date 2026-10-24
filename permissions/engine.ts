@@ -45,6 +45,7 @@ export const DEFAULT_POLICY: PermissionPolicy = {
     PURCHASE: { decision: "ask" },
     ACCOUNT_CHANGE: { decision: "ask" },
     POWER_CONTROL: { decision: "ask" },
+    PHONE_CALL: { decision: "ask" },
   },
   messageConfirmation: "always_confirm",
   trustedContacts: [],

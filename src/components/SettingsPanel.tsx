@@ -8,17 +8,18 @@
  *    permission policy (/api/permissions), which the agent enforces.
  * Only settings that the app actually honours are shown here.
  */
+import { saraFetch } from "../lib/serverConfig";
 import React, { useEffect, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Settings, X, Power, Mic, Cpu, Info, Check, AlertTriangle, Sparkles, KeyRound, Loader2, Brain, ShieldCheck,
-  Bell, Eye, MonitorSmartphone, Lock, Wrench,
+  Bell, Eye, MonitorSmartphone, Lock, Wrench, MessageCircleHeart, Scale, Phone,
 } from "lucide-react";
 import type { MyraaSettings } from "../lib/settingsStore";
-import { api, LOCKED_CAPABILITIES, type AppSettings, type AppSettingsPatch, type Decision, type ModelCatalogue, type PermissionsView, type MessageConfirmationMode } from "../lib/appApi";
+import { api, LOCKED_CAPABILITIES, type AppSettings, type AppSettingsPatch, type Decision, type ModelCatalogue, type PermissionsView, type MessageConfirmationMode, type PersonaSettings, type RealitySettings } from "../lib/appApi";
 import { ModelSelectorPanel } from "./ModelSelector";
 
-export type SettingsSection = "general" | "ai" | "voice" | "agent" | "privacy" | "presence" | "character" | "system" | "about";
+export type SettingsSection = "general" | "ai" | "voice" | "persona" | "reality" | "calls" | "agent" | "privacy" | "presence" | "character" | "system" | "about";
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -39,6 +40,9 @@ const SECTIONS: { id: SettingsSection; label: string; icon: typeof Power }[] = [
   { id: "general", label: "General", icon: Power },
   { id: "ai", label: "AI models & keys", icon: Brain },
   { id: "voice", label: "Voice", icon: Mic },
+  { id: "persona", label: "Personality", icon: MessageCircleHeart },
+  { id: "reality", label: "Reality mode", icon: Scale },
+  { id: "calls", label: "Calls", icon: Phone },
   { id: "agent", label: "PC control & safety", icon: ShieldCheck },
   { id: "privacy", label: "Privacy", icon: Lock },
   { id: "presence", label: "Presence", icon: Bell },
@@ -152,7 +156,7 @@ function GeminiKeyBox() {
 
   // The backend reports only whether a key exists; it never returns the secret.
   useEffect(() => {
-    void fetch("/api/config", { cache: "no-store" }).then((r) => r.json()).then((d) => setConfigured(Boolean(d.hasApiKey))).catch(() => setConfigured(false));
+    void saraFetch("/api/config", { cache: "no-store" }).then((r) => r.json()).then((d) => setConfigured(Boolean(d.hasApiKey))).catch(() => setConfigured(false));
   }, []);
 
   const save = async () => {
@@ -161,7 +165,7 @@ function GeminiKeyBox() {
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/config/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiKey }) });
+      const res = await saraFetch("/api/config/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiKey }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "The API key could not be saved.");
       setConfigured(true);
@@ -300,7 +304,7 @@ export function PermissionRows({ view, capabilities, onSet }: { view: Permission
   );
 }
 
-const ACTION_CAPABILITIES = ["LAUNCH_APP", "BROWSE_WEB", "CONTROL_INPUT", "READ_FILE", "WRITE_FILE", "DELETE_FILE", "DOWNLOAD_FILE", "EXECUTE_DOWNLOAD", "RUN_COMMAND", "INSTALL_SOFTWARE", "MODIFY_SYSTEM_SETTINGS", "SEND_MESSAGE", "NETWORK_API", "PURCHASE", "ACCOUNT_CHANGE", "POWER_CONTROL"];
+const ACTION_CAPABILITIES = ["LAUNCH_APP", "BROWSE_WEB", "CONTROL_INPUT", "READ_FILE", "WRITE_FILE", "DELETE_FILE", "DOWNLOAD_FILE", "EXECUTE_DOWNLOAD", "RUN_COMMAND", "INSTALL_SOFTWARE", "MODIFY_SYSTEM_SETTINGS", "SEND_MESSAGE", "NETWORK_API", "PURCHASE", "ACCOUNT_CHANGE", "POWER_CONTROL", "PHONE_CALL"];
 const PRIVACY_CAPABILITIES = ["SCREEN_CAPTURE", "CLIPBOARD", "ACCESS_MICROPHONE", "ACCESS_CAMERA"];
 
 const MESSAGE_MODES: [MessageConfirmationMode, string][] = [
@@ -363,7 +367,7 @@ function SystemSection({ app, patch, onRestartOnboarding }: { app: AppSettings; 
   useEffect(() => {
     const probe = async () => {
       try {
-        const res = await fetch("/api/agent-health", { cache: "no-store" });
+        const res = await saraFetch("/api/agent-health", { cache: "no-store" });
         const data = res.ok ? await res.json() : null;
         setAgent({ online: Boolean(data?.online), toolCount: data?.tool_count });
       } catch {
@@ -391,6 +395,156 @@ function SystemSection({ app, patch, onRestartOnboarding }: { app: AppSettings; 
           <button type="button" onClick={onRestartOnboarding} className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-white/10 cursor-pointer">Start</button>
         </Row>
       </Group>
+    </div>
+  );
+}
+
+const PERSONA_PROFILES: Array<[PersonaSettings["profile"], string]> = [
+  ["companion", "Companion"],
+  ["friend", "Friend"],
+  ["mentor", "Mentor"],
+  ["professional", "Professional"],
+  ["executive", "Executive"],
+  ["emergency", "Emergency"],
+];
+
+/** Each profile preloads the sliders; moving a slider keeps the profile name. */
+const PROFILE_PRESETS: Record<PersonaSettings["profile"], PersonaSettings> = {
+  companion: { profile: "companion", context: "both", warmth: 78, humor: 55, formality: 30, directness: 55, empathy: 75, energy: 60, curiosity: 65 },
+  friend: { profile: "friend", context: "personal", warmth: 72, humor: 70, formality: 22, directness: 60, empathy: 65, energy: 70, curiosity: 62 },
+  mentor: { profile: "mentor", context: "both", warmth: 55, humor: 35, formality: 45, directness: 78, empathy: 55, energy: 50, curiosity: 82 },
+  professional: { profile: "professional", context: "professional", warmth: 45, humor: 30, formality: 68, directness: 70, empathy: 50, energy: 55, curiosity: 55 },
+  executive: { profile: "executive", context: "professional", warmth: 35, humor: 18, formality: 62, directness: 92, empathy: 35, energy: 48, curiosity: 42 },
+  emergency: { profile: "emergency", context: "both", warmth: 40, humor: 5, formality: 40, directness: 95, empathy: 45, energy: 85, curiosity: 20 },
+};
+
+type PersonaDimension = "warmth" | "humor" | "formality" | "directness" | "empathy" | "energy" | "curiosity";
+
+const DIMENSION_ROWS: Array<{ key: PersonaDimension; label: string; low: string; high: string }> = [
+  { key: "warmth", label: "Warmth", low: "Cold", high: "Warm" },
+  { key: "humor", label: "Humour", low: "Serious", high: "Playful" },
+  { key: "formality", label: "Formality", low: "Casual", high: "Formal" },
+  { key: "directness", label: "Directness", low: "Gentle", high: "Blunt" },
+  { key: "empathy", label: "Empathy", low: "Matter-of-fact", high: "Attentive" },
+  { key: "energy", label: "Energy", low: "Calm", high: "Energetic" },
+  { key: "curiosity", label: "Curiosity", low: "Answers only", high: "Asks questions" },
+];
+
+function PersonaSection({ app, patch }: { app: AppSettings; patch: (p: AppSettingsPatch) => void }) {
+  const persona = app.persona;
+  const setDimension = (key: PersonaDimension, value: number) => patch({ persona: { [key]: value } as Partial<PersonaSettings> });
+  return (
+    <div className="space-y-5">
+      <Group title="Profile" hint="A profile is a starting point. It changes how Sara talks — never what she knows, and never what she is allowed to do.">
+        <Row label="Who is she being right now?" description={`${app.persona.profile[0].toUpperCase()}${app.persona.profile.slice(1)} — presets the sliders below.`}>
+          <select aria-label="Personality profile" value={persona.profile}
+            onChange={(e) => patch({ persona: PROFILE_PRESETS[e.target.value as PersonaSettings["profile"]] })}
+            className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white outline-none cursor-pointer">
+            {PERSONA_PROFILES.map(([id, text]) => <option key={id} value={id}>{text}</option>)}
+          </select>
+        </Row>
+        <Row label="Context" description="Which parts of your life she treats as the default topic.">
+          <select aria-label="Personality context" value={persona.context}
+            onChange={(e) => patch({ persona: { context: e.target.value as PersonaSettings["context"] } })}
+            className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[11px] text-white outline-none cursor-pointer">
+            <option value="personal">Personal</option>
+            <option value="professional">Professional</option>
+            <option value="both">Both</option>
+          </select>
+        </Row>
+      </Group>
+
+      <Group title="Tone" hint="These are delivery settings only. They are added to her instructions; they cannot grant permissions or change facts.">
+        {DIMENSION_ROWS.map((row) => (
+          <div key={row.key}>
+            <SliderRow label={row.label} description={`${row.low} → ${row.high}`} min={0} max={100}
+              value={persona[row.key] as number}
+              onChange={(v) => setDimension(row.key, v)} />
+          </div>
+        ))}
+      </Group>
+
+      <Group title="Saving">
+        <Row label="Back to the profile" description="Discard your slider changes and reload the profile's tone.">
+          <button type="button" onClick={() => patch({ persona: PROFILE_PRESETS[persona.profile] })}
+            className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-white/10 cursor-pointer">Reset tone</button>
+        </Row>
+      </Group>
+
+      <Note>
+        Mood is <b>inferred from your words</b>, and inference can be wrong — she is told to say so instead of assuming.
+        Automatic switching between profiles (for example to Emergency when you sound stressed) is <b>not implemented</b>;
+        she uses the profile you set here. That is deliberate: an inferred mood is not a good enough reason to change her whole manner.
+      </Note>
+    </div>
+  );
+}
+
+const ANSWER_MODES: Array<["never" | "ask" | "auto", string]> = [["never", "Never"], ["ask", "Ask me"], ["auto", "Answer"]];
+
+function CallsSection({ app, patch }: { app: AppSettings; patch: (p: AppSettingsPatch) => void }) {
+  const calls = app.calls;
+  return (
+    <div className="space-y-5">
+      <Group title="Phone integration" hint="Call state comes from the Sara Android app. A Windows process cannot read a cellular call, and Android does not let an ordinary app speak into one.">
+        <ToggleRow label="Accept call events from my phone"
+          description="Off by default. The phone must also send the device token configured on the server."
+          checked={calls.enabled} onChange={(v) => patch({ calls: { enabled: v } })} />
+        <Row label="Screening" description="When Sara may answer, she asks who is calling and why before connecting you.">
+          <Choice label="Call screening" value={calls.screenCalls ? "on" : "off"}
+            options={[["on", "On"], ["off", "Off"]]} onChange={(v) => patch({ calls: { screenCalls: v === "on" } })} />
+        </Row>
+        <ToggleRow label="Take messages" description="Store what the caller said and notify you." checked={calls.takeMessage} onChange={(v) => patch({ calls: { takeMessage: v } })} />
+        <ToggleRow label="Tell me about missed calls" checked={calls.notifyOnMissed} onChange={(v) => patch({ calls: { notifyOnMissed: v } })} />
+        <SliderRow label="Longest call Sara may hold" description="After this she ends the call and summarises it." value={calls.maxCallMinutes} min={1} max={60} unit=" min" onChange={(v) => patch({ calls: { maxCallMinutes: v } })} />
+      </Group>
+
+      <Group title="Who may Sara answer?" hint="“Answer” means Sara answers and screens. Unknown numbers are never answered automatically, whatever this says.">
+        <Row label="Family"><Choice label="Family" value={calls.answerFamily} options={ANSWER_MODES} onChange={(v) => patch({ calls: { answerFamily: v } })} /></Row>
+        <Row label="Business contacts"><Choice label="Business contacts" value={calls.answerBusinessContacts} options={ANSWER_MODES} onChange={(v) => patch({ calls: { answerBusinessContacts: v } })} /></Row>
+        <Row label="Other known contacts"><Choice label="Other known contacts" value={calls.answerKnownContacts} options={ANSWER_MODES} onChange={(v) => patch({ calls: { answerKnownContacts: v } })} /></Row>
+        <ToggleRow label="Ask me about unknown callers" description="Sara asks whether to answer. She never answers an unknown number on her own." checked={calls.answerUnknownCall} onChange={(v) => patch({ calls: { answerUnknownCall: v } })} />
+      </Group>
+
+      <Group title="Quiet moments">
+        <ToggleRow label="Answer during meetings" checked={calls.answerDuringMeetings} onChange={(v) => patch({ calls: { answerDuringMeetings: v } })} />
+        <ToggleRow label="Answer in focus mode" checked={calls.answerDuringFocus} onChange={(v) => patch({ calls: { answerDuringFocus: v } })} />
+      </Group>
+
+      <Note tone="warn">
+        Sara cannot talk into a normal cellular call: Android keeps in-call audio for the system dialer. Answering and hanging up also need the
+        system dialer role; without it the phone reports “not permitted” instead of pretending it worked. Everything else here — identification,
+        the policy, taking messages and summaries — runs on the server and is real.
+      </Note>
+    </div>
+  );
+}
+
+function RealitySection({ app, patch }: { app: AppSettings; patch: (p: AppSettingsPatch) => void }) {
+  return (
+    <div className="space-y-5">
+      <Group title="Reality mode" hint="How strictly Sara separates what she knows from what she is guessing.">
+        <Row label="Mode" description="Strict also requires counter-evidence and confidence labels when she answers.">
+          <Choice<RealitySettings["mode"]> label="Reality mode" value={app.reality.mode}
+            options={[["off", "Off"], ["standard", "Standard"], ["strict", "Strict"]]}
+            onChange={(v) => patch({ reality: { mode: v } })} />
+        </Row>
+        <ToggleRow label="Challenge my assumptions"
+          description="When your premise is wrong or unproven, she says so before answering."
+          checked={app.reality.challengeAssumptions} onChange={(v) => patch({ reality: { challengeAssumptions: v } })} />
+      </Group>
+
+      <Note tone={app.reality.mode === "off" ? "warn" : "ok"}>
+        {app.reality.mode === "off"
+          ? "Off: she answers normally. No fact / assumption labelling, so a confident guess can read like a fact."
+          : app.reality.mode === "strict"
+            ? "Strict: every substantive answer is split into FACT, ASSUMPTION, PREDICTION, RECOMMENDATION and UNKNOWN, with a confidence level, and she must correct a false premise before answering it."
+            : "Standard: she labels facts, assumptions and unknowns on anything that matters, without making every reply heavy."}
+      </Note>
+
+      <Note>
+        This labels her language. It does not verify anything against the outside world — she has no ground-truth feed, so a FACT still means "known to me", not "checked just now".
+      </Note>
     </div>
   );
 }
@@ -466,7 +620,7 @@ export function SettingsPanel({ isOpen, onClose, settings, onChange, appSettings
                       <ToggleRow label="Launch at Windows startup" description="Start Sara quietly when you log in." checked={settings.autoStart}
                         onChange={(v) => {
                           onChange({ autoStart: v });
-                          void fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoStart: v }) }).catch(() => {});
+                          void saraFetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoStart: v }) }).catch(() => {});
                         }} />
                       <ToggleRow label="Animations" description="Motion and transitions in the interface." checked={settings.animations} onChange={(v) => onChange({ animations: v })} />
                     </Group>
@@ -617,6 +771,9 @@ export function SettingsPanel({ isOpen, onClose, settings, onChange, appSettings
                   </div>
                 )}
 
+                {section === "persona" && app && <PersonaSection app={app} patch={patch} />}
+                {section === "reality" && app && <RealitySection app={app} patch={patch} />}
+                {section === "calls" && app && <CallsSection app={app} patch={patch} />}
                 {section === "system" && app && <SystemSection app={app} patch={patch} onRestartOnboarding={onRestartOnboarding} />}
 
                 {section === "about" && (

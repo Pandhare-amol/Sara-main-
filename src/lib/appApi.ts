@@ -5,6 +5,8 @@
  * `saveProviderKey`, which posts the key once and keeps no copy.
  */
 
+import { saraFetch } from "./serverConfig";
+
 // ---- tasks ------------------------------------------------------------------------------
 
 export type TaskState =
@@ -158,6 +160,224 @@ export interface AppSettings {
   privacy: { screenAwareness: boolean; cameraPresence: boolean; clipboardInContext: boolean };
   performance: { activeFps: number; idleFps: number; sleepFps: number; perceptionPollSec: number };
   developer: { debugView: boolean; physicsDebug: boolean; verboseLogs: boolean };
+  persona: PersonaSettings;
+  reality: RealitySettings;
+  calls: CallSettingsView;
+}
+
+export type PersonaProfileId = "companion" | "professional" | "executive" | "mentor" | "friend" | "emergency";
+
+export interface PersonaSettings {
+  profile: PersonaProfileId;
+  context: "personal" | "professional" | "both";
+  warmth: number;
+  humor: number;
+  formality: number;
+  directness: number;
+  empathy: number;
+  energy: number;
+  curiosity: number;
+}
+
+export interface RealitySettings {
+  mode: "off" | "standard" | "strict";
+  challengeAssumptions: boolean;
+}
+
+// ---- calls (communication/) -------------------------------------------------------------
+
+export type CallState = "RINGING" | "CONNECTED" | "ACTIVE" | "HELD" | "ENDED" | "MISSED" | "REJECTED" | "FAILED" | "UNKNOWN";
+
+export interface CallPeerView {
+  number: string;
+  name: string | null;
+  contactId: string | null;
+  relationship: string;
+  organization: string | null;
+  priority: "high" | "normal" | "low";
+  unknown: boolean;
+}
+
+export interface CallRecordView {
+  id: string;
+  deviceCallId: string;
+  deviceId: string;
+  direction: "incoming" | "outgoing";
+  peer: CallPeerView;
+  state: CallState;
+  decision: { action: string; reason: string; requiresUser: boolean } | null;
+  createdAt: string;
+  updatedAt: string;
+  answeredAt: string | null;
+  endedAt: string | null;
+  durationSec: number | null;
+  transcript: Array<{ role: "caller" | "sara"; text: string; at: string }>;
+}
+
+export interface CallSummaryView {
+  caller: string | null;
+  number: string;
+  purpose: string | null;
+  requests: string[];
+  promises: string[];
+  deadlines: string[];
+  followUps: string[];
+  messages: string[];
+  sentiment: string;
+  urgency: string;
+  basis: string[];
+  notes: string[];
+}
+
+export interface CallMessageView {
+  id: string;
+  callId: string | null;
+  callerName: string | null;
+  number: string;
+  text: string;
+  at: string;
+  source: "call" | "manual";
+}
+
+export interface CallSettingsView {
+  enabled: boolean;
+  answerKnownContacts: "never" | "ask" | "auto";
+  answerFamily: "never" | "ask" | "auto";
+  answerBusinessContacts: "never" | "ask" | "auto";
+  answerUnknownCall: boolean;
+  answerDuringMeetings: boolean;
+  answerDuringFocus: boolean;
+  screenCalls: boolean;
+  takeMessage: boolean;
+  notifyOnMissed: boolean;
+  maxCallMinutes: number;
+}
+
+export interface OutgoingCallPlan {
+  status: "needs_confirmation" | "queued" | "ambiguous" | "unknown_contact" | "refused";
+  message: string;
+  target?: { name: string | null; number: string; contactId: string | null };
+  candidates?: Array<{ id: string; displayName: string }>;
+}
+
+// ---- operation receipts (operations/journal.ts) -------------------------------------------
+
+export type OperationStatus = "RUNNING" | "SUCCESS" | "FAILED" | "UNCERTAIN" | "CANCELLED" | "NEEDS_APPROVAL";
+export type UndoState = "none" | "available" | "done" | "failed" | "unavailable";
+
+export interface OperationView {
+  id: string;
+  at: string;
+  endedAt: string | null;
+  taskId: string | null;
+  tool: string;
+  args: string;
+  status: OperationStatus;
+  verified: boolean;
+  verification: string | null;
+  summary: string;
+  error: string | null;
+  durationMs: number | null;
+  undo: { tool: string; label: string; destructive: boolean } | null;
+  undoState: UndoState;
+  undoneAt: string | null;
+}
+
+// ---- capabilities (capabilities/registry.ts) --------------------------------------------
+
+export type CapabilityStatus = "AVAILABLE" | "NEEDS_PERMISSION" | "UNAVAILABLE" | "NOT_SUPPORTED" | "UNKNOWN";
+
+export interface CapabilityView {
+  id: string;
+  label: string;
+  area: string;
+  platform: string;
+  risk: "low" | "medium" | "high" | "critical";
+  status: CapabilityStatus;
+  permissions: string[];
+  detail: string;
+  verification: string;
+  tool?: string;
+}
+
+export interface CapabilityCatalogue {
+  capabilities: CapabilityView[];
+  available: string[];
+  summary: string;
+  devices: Array<{ deviceId: string; platform: string; reportedAt: string; count: number }>;
+}
+
+// ---- messaging (communication/messaging) -------------------------------------------------
+
+export interface ProviderView { id: string; label: string; status: { ok: boolean; detail: string } }
+
+export interface InboundMessageView {
+  id: string;
+  provider: string;
+  conversationId: string;
+  fromId: string;
+  fromName: string | null;
+  text: string;
+  at: string;
+  unread: boolean;
+  importance: "high" | "normal" | "low";
+  reason: string;
+}
+
+export interface SendOutcomeView {
+  status: "SENT" | "FAILED" | "UNCERTAIN" | "REQUIRES_APPROVAL" | "NOT_SUPPORTED" | "PERMISSION_DENIED";
+  verified: boolean;
+  provider: string;
+  to: string;
+  detail: string;
+  providerMessageId?: string;
+  approvalId?: string;
+  preview?: string;
+  error?: { code: string; message: string; retryable: boolean };
+}
+
+// ---- mobile composition API (server_mobileApi.ts) ----------------------------------------
+
+export interface MobileBriefing {
+  generatedAt: string;
+  greeting: string;
+  mode: { persona: PersonaProfileId; context: PersonaSettings["context"]; reality: RealitySettings["mode"] };
+  counts: { activeTasks: number; needsYou: number; remindersToday: number; finishedToday: number; memories: number; openGoals: number };
+  nextReminders: Array<{ id: string; kind: string; label: string; dueAt: number; inMinutes: number; today: boolean; repeat: string }>;
+  activeTasks: Array<{ id: string; goal: string; state: string; status: string | null; waitingQuestion: string | null }>;
+  pausedTasks: Array<{ id: string; goal: string; state: string }>;
+  confirmations: Array<{ id: string; title: string; description: string; capability: string; createdAt: string }>;
+  finishedToday: Array<{ id: string; goal: string; state: string; result: string | null }>;
+  goals: Array<{ id: string; title: string; progress: number | null; nextAction: string | null }>;
+  pc: { agentOnline: boolean; toolCount: number | null; remoteControlAllowed: boolean; availableFromThisDevice: boolean };
+  notes: string[];
+  sources: string[];
+}
+
+export type DiagnosticState = "ok" | "attention" | "offline" | "unknown";
+
+export interface MobileDiagnostics {
+  generatedAt: string;
+  overall: DiagnosticState;
+  items: Array<{ id: string; label: string; state: DiagnosticState; detail: string; action?: string }>;
+}
+
+export interface MobileAutomations {
+  generatedAt: string;
+  scheduled: Array<{ id: string; kind: string; label: string; dueAt: number; repeat: string; status: string }>;
+  repeating: number;
+  goals: Array<{ id: string; title: string; status: string; progress: number | null; nextAction: string | null }>;
+  skills: Array<{ id: string; name: string }>;
+  activity: Array<{ at: string; kind: string; summary: string; taskId: string | null }>;
+  notes: string[];
+}
+
+export interface VisionAnswer {
+  answer: string;
+  question: string;
+  modelId: string;
+  latencyMs: number;
+  realityMode: RealitySettings["mode"];
 }
 
 /** Deep-partial patch accepted by POST /api/app-settings. */
@@ -175,7 +395,7 @@ export interface CharacterSummary {
 // ---- fetch helpers ----------------------------------------------------------------------
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await saraFetch(url, {
     method,
     cache: "no-store",
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
@@ -218,6 +438,49 @@ export const api = {
   setDnd: (active: boolean) => request<unknown>("POST", "/api/dnd", { active }),
 
   characters: () => request<CharacterSummary[]>("GET", "/api/characters"),
+
+  // Calls. The phone reports states; this UI decides and asks.
+  calls: () => request<{ active: CallRecordView[]; recent: CallRecordView[] }>("GET", "/api/calls?limit=20"),
+  callDetail: (id: string) => request<{ call: CallRecordView; summary: CallSummaryView; messages: CallMessageView[] }>("GET", `/api/calls/${encodeURIComponent(id)}`),
+  callPolicy: () => request<{ calls: CallSettingsView; deviceTokenConfigured: boolean }>("GET", "/api/calls/policy"),
+  updateCallPolicy: (patch: Partial<CallSettingsView>) => request<{ ok: boolean; calls: CallSettingsView }>("POST", "/api/calls/policy", patch),
+  answerCall: (id: string) => request<{ ok: boolean; call: CallRecordView }>("POST", `/api/calls/${encodeURIComponent(id)}/answer`, {}),
+  rejectCall: (id: string) => request<{ ok: boolean; call: CallRecordView }>("POST", `/api/calls/${encodeURIComponent(id)}/reject`, {}),
+  endCall: (id: string) => request<{ ok: boolean; call: CallRecordView }>("POST", `/api/calls/${encodeURIComponent(id)}/end`, {}),
+  saveCallMessage: (id: string, text: string) => request<{ ok: boolean; message: CallMessageView }>("POST", `/api/calls/${encodeURIComponent(id)}/message`, { text }),
+  outgoingCall: (input: { query?: string; number?: string; purpose?: string; confirmed?: boolean }) =>
+    request<OutgoingCallPlan>("POST", "/api/calls/outgoing", input),
+
+  // The PC's own screen. Desktop-only on the server unless the operator opts in
+  // with SARA_REMOTE_ALLOW_DESKTOP=1; a 403 is reported, never hidden.
+  capturePcScreen: (maxDim = 1024) =>
+    request<{ ok: boolean; width: number; height: number; active_window: string | null; image_base64: string; image_mime: string; source: string }>(
+      "POST",
+      "/api/screen-vision",
+      { max_dim: maxDim },
+    ),
+
+  // Operation receipts and undo.
+  operations: (limit = 40) => request<{ operations: OperationView[] }>("GET", `/api/operations?limit=${limit}`),
+  undoOperation: (id: string) =>
+    request<{ ok: boolean; label: string; result: { summary: string; error?: string } }>("POST", `/api/operations/${encodeURIComponent(id)}/undo`, {}),
+
+  // Capabilities and messaging.
+  capabilities: () => request<CapabilityCatalogue>("GET", "/api/capabilities"),
+  messagingStatus: () => request<{ providers: ProviderView[]; webhookConfigured: boolean }>("GET", "/api/messaging/status"),
+  messagingSummary: () =>
+    request<{ total: number; unread: number; important: number; byProvider: Record<string, number>; highlights: InboundMessageView[] }>("GET", "/api/messaging/summary"),
+  messages: (query = "") => request<{ messages: InboundMessageView[] }>("GET", `/api/messaging/messages${query ? `?${query}` : ""}`),
+  sendMessage: (input: { provider: string; to: string; text: string; confirmed?: boolean }) =>
+    request<SendOutcomeView>("POST", "/api/messaging/send", input),
+
+  // Mobile composition endpoints. They read the same stores as the desktop UI.
+  briefing: () => request<MobileBriefing>("GET", "/api/mobile/briefing"),
+  diagnostics: () => request<MobileDiagnostics>("GET", "/api/mobile/diagnostics"),
+  automations: () => request<MobileAutomations>("GET", "/api/mobile/automations"),
+  vision: (image: string, mimeType: string, question: string) =>
+    request<VisionAnswer>("POST", "/api/mobile/vision", { image, mimeType, question }),
+  stopEverything: () => request<{ ok: boolean; stoppedTasks: number; deniedConfirmations: number }>("POST", "/api/mobile/stop", { reason: "phone_stop_button" }),
 };
 
 export const AVAILABILITY_LABEL: Record<ModelAvailability, string> = {

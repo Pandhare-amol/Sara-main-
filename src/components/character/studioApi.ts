@@ -1,4 +1,5 @@
 /** Backend calls used by the Character Studio. All go to the local server. */
+import { saraFetch } from "../../lib/serverConfig";
 import type { CharacterProfile, RuntimeTestResult } from '@/shared/character/profile';
 
 async function json<T>(response: Response): Promise<T> {
@@ -8,24 +9,24 @@ async function json<T>(response: Response): Promise<T> {
 }
 
 export const studioApi = {
-  profile: (id: string) => fetch(`/api/characters/${encodeURIComponent(id)}`).then((r) => json<CharacterProfile>(r)),
+  profile: (id: string) => saraFetch(`/api/characters/${encodeURIComponent(id)}`).then((r) => json<CharacterProfile>(r)),
   update: (id: string, patch: Partial<CharacterProfile>) =>
-    fetch(`/api/characters/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => json<CharacterProfile>(r)),
-  remove: (id: string) => fetch(`/api/characters/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) => json<{ ok: boolean }>(r)),
+    saraFetch(`/api/characters/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => json<CharacterProfile>(r)),
+  remove: (id: string) => saraFetch(`/api/characters/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) => json<{ ok: boolean }>(r)),
   importSource: (source: string, displayName?: string) =>
-    fetch('/api/characters/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source, displayName }) }).then((r) =>
+    saraFetch('/api/characters/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source, displayName }) }).then((r) =>
       json<{ profile: CharacterProfile; warnings: string[]; replaced: boolean }>(r)
     ),
   recordTests: (id: string, results: Record<string, RuntimeTestResult>) =>
-    fetch(`/api/characters/${encodeURIComponent(id)}/tests`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ results }) }).then((r) => json<CharacterProfile>(r)),
+    saraFetch(`/api/characters/${encodeURIComponent(id)}/tests`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ results }) }).then((r) => json<CharacterProfile>(r)),
   poses: (characterId: string) =>
-    fetch(`/api/poses?characterId=${encodeURIComponent(characterId)}`).then((r) => json<SavedPoseRecord[]>(r)),
+    saraFetch(`/api/poses?characterId=${encodeURIComponent(characterId)}`).then((r) => json<SavedPoseRecord[]>(r)),
   savePose: (pose: Omit<SavedPoseRecord, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }) =>
-    fetch('/api/poses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pose) }).then((r) => json<SavedPoseRecord>(r)),
-  deletePose: (id: string) => fetch(`/api/poses/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) => json<{ ok: boolean }>(r)),
-  settings: () => fetch('/api/app-settings').then((r) => json<AppSettingsLite>(r)),
+    saraFetch('/api/poses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pose) }).then((r) => json<SavedPoseRecord>(r)),
+  deletePose: (id: string) => saraFetch(`/api/poses/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) => json<{ ok: boolean }>(r)),
+  settings: () => saraFetch('/api/app-settings').then((r) => json<AppSettingsLite>(r)),
   patchSettings: (patch: Record<string, unknown>) =>
-    fetch('/api/app-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => json<AppSettingsLite>(r)),
+    saraFetch('/api/app-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => json<AppSettingsLite>(r)),
 };
 
 export interface SavedPoseRecord {

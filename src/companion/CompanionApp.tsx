@@ -13,6 +13,7 @@
  * - A thin contour and a soft shadow keep her readable on any wallpaper.
  * - Activity and emotion mirror the main MYRAA window (BroadcastChannel).
  */
+import { saraFetch } from "../lib/serverConfig";
 import React, { useEffect, useRef, useState } from 'react';
 import { MyraaCharacter } from '../character/MyraaCharacter';
 import type { CharacterSystem } from '../character/core/CharacterSystem';
@@ -75,7 +76,7 @@ export const CompanionApp: React.FC = () => {
 
   // Which character, cursor-follow and contrast preferences.
   useEffect(() => {
-    fetch('/api/app-settings')
+    saraFetch('/api/app-settings')
       .then((r) => r.json())
       .then((settings) => {
         setCharacterId(settings?.character?.activeCharacterId || undefined);
