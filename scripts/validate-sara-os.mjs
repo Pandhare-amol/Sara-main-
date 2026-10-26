@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const required = [
   "os/Dockerfile",
+  "os/build-inside-container.sh",
   "os/README.md",
   "os/live/auto/config",
   "os/live/config/package-lists/sara.list.chroot",
@@ -39,14 +40,17 @@ if (!failures.length) {
     if (!launcher.includes(token)) failures.push(`session launcher is missing ${token}`);
   }
   if (/--no-sandbox\b/.test(launcher)) failures.push("Chromium sandbox must not be disabled");
-  if (!dockerfile.includes("FROM scratch AS artifact")) failures.push("Dockerfile must expose a filesystem-only artifact stage");
-  if (!dockerfile.includes("sha256sum")) failures.push("Dockerfile must emit an ISO SHA-256 file");
+  if (!dockerfile.includes("ENTRYPOINT [\"/usr/local/bin/build-sara-os-image\"]")) failures.push("Dockerfile must invoke the live-build entrypoint");
+  const innerBuilder = read("os/build-inside-container.sh");
+  if (!innerBuilder.includes("sha256sum")) failures.push("container build entrypoint must emit an ISO SHA-256 file");
+  const outerBuilder = read("scripts/build-sara-os.mjs");
+  if (!outerBuilder.includes('"--privileged"')) failures.push("outer builder must grant the disposable live-build container mount privileges");
   for (const forbidden of ["pywin32", "pywinauto", "pycaw", "winrt-"]) {
     if (new RegExp(`^${forbidden}`, "m").test(linuxRequirements)) failures.push(`Linux requirements include Windows-only dependency ${forbidden}`);
   }
 
-  const osTree = ["os/Dockerfile", ...walk(path.join(root, "os", "live")).map((file) => path.relative(root, file))]
-    .map((file) => read(file))
+  const osTree = walk(path.join(root, "os"))
+    .map((file) => read(path.relative(root, file)))
     .join("\n");
   for (const pattern of [/AIza[0-9A-Za-z_-]{20,}/, /sk-[0-9A-Za-z_-]{20,}/, /GEMINI_API_KEY\s*=\s*[^"'\s$][^\s]*/]) {
     if (pattern.test(osTree)) failures.push(`OS profile appears to contain a credential matching ${pattern}`);

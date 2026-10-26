@@ -14,9 +14,10 @@ test("Sara OS profile defines a hybrid live/install image and cross-platform con
   assert.match(config, /--binary-images iso-hybrid/);
   assert.match(config, /--debian-installer live/);
   assert.match(config, /username=sara/);
-  assert.match(dockerfile, /FROM scratch AS artifact/);
-  assert.match(dockerfile, /sha256sum/);
-  assert.match(dockerfile, /SaraOS-\$\{SARA_VERSION\}-amd64\.iso/);
+  const innerBuilder = read("os/build-inside-container.sh");
+  assert.match(dockerfile, /ENTRYPOINT \["\/usr\/local\/bin\/build-sara-os-image"\]/);
+  assert.match(innerBuilder, /sha256sum/);
+  assert.match(innerBuilder, /SaraOS-\$\{SARA_VERSION\}-amd64\.iso/);
 });
 
 test("Sara OS shell is local, non-root, sandboxed, and uses Secret Service", () => {
@@ -53,6 +54,8 @@ test("Sara OS profile validator and dry-run builder pass without Docker", () => 
   assert.match(dryRun, /--platform/);
   assert.match(dryRun, /linux\/amd64/);
   assert.match(dryRun, /os\/Dockerfile/);
+  assert.match(dryRun, /--privileged/);
+  assert.match(dryRun, /docker "run"/);
 });
 
 test("Sara OS profile contains no embedded provider key", () => {

@@ -26,7 +26,10 @@ Usage:
 
 The output directory defaults to out/sara-os. Existing ISO artifacts are never
 overwritten unless --force is supplied. The image boots on UEFI and legacy BIOS
-x86_64 PCs and in VM software available on Windows, macOS, and Linux.`);
+x86_64 PCs and in VM software available on Windows, macOS, and Linux.
+
+The disposable builder container uses --privileged because Debian live-build
+must mount proc/devpts inside its chroot. Sara itself never runs privileged.`);
   process.exit(0);
 }
 
@@ -57,15 +60,29 @@ function capture(command, commandArgs, fallback) {
   return result.status === 0 && result.stdout.trim() ? result.stdout.trim() : fallback;
 }
 
+function run(command, commandArgs) {
+  console.log(`${command} ${commandArgs.map((part) => JSON.stringify(part)).join(" ")}`);
+  if (dryRun) return;
+  const result = spawnSync(command, commandArgs, {
+    cwd: root,
+    stdio: "inherit",
+    env: { ...process.env, DOCKER_BUILDKIT: process.env.DOCKER_BUILDKIT || "1" },
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
 const revision = capture("git", ["rev-parse", "--short=12", "HEAD"], "unknown");
 const sourceEpoch = capture("git", ["show", "-s", "--format=%ct", "HEAD"], "0");
-const outputSpec = `type=local,dest=${output}`;
+const safeVersion = String(pkg.version).toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
+const safeRevision = revision.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
+const builderTag = `sara-os-builder:${safeVersion}-${safeRevision}`;
 const buildArgs = [
   "build",
   "--platform", "linux/amd64",
   "--file", "os/Dockerfile",
-  "--target", "artifact",
-  "--output", outputSpec,
+  "--target", "iso-builder",
+  "--tag", builderTag,
   "--build-arg", `SARA_VERSION=${pkg.version}`,
   "--build-arg", `SARA_REVISION=${revision}`,
   "--build-arg", `SOURCE_DATE_EPOCH=${sourceEpoch}`,
@@ -73,22 +90,27 @@ const buildArgs = [
 if (noCache) buildArgs.push("--no-cache");
 buildArgs.push(".");
 
+const runArgs = [
+  "run",
+  "--rm",
+  "--privileged",
+  "--platform", "linux/amd64",
+  "--env", `SARA_OUTPUT_UID=${typeof process.getuid === "function" ? process.getuid() : 0}`,
+  "--env", `SARA_OUTPUT_GID=${typeof process.getgid === "function" ? process.getgid() : 0}`,
+  "--volume", `${output}:/out`,
+  builderTag,
+];
+
 console.log(`Sara OS ${pkg.version} (${revision})`);
-console.log(`${engine} ${buildArgs.map((part) => JSON.stringify(part)).join(" ")}`);
-if (dryRun) process.exit(0);
-
-const probe = spawnSync(engine, ["version"], { cwd: root, stdio: "ignore" });
-if (probe.status !== 0) {
-  throw new Error(`${engine} is not available. Install Docker Desktop or Podman and ensure its engine is running.`);
+if (!dryRun) {
+  const probe = spawnSync(engine, ["version"], { cwd: root, stdio: "ignore" });
+  if (probe.status !== 0) {
+    throw new Error(`${engine} is not available. Install Docker Desktop or Podman and ensure its engine is running.`);
+  }
 }
-
-const result = spawnSync(engine, buildArgs, {
-  cwd: root,
-  stdio: "inherit",
-  env: { ...process.env, DOCKER_BUILDKIT: process.env.DOCKER_BUILDKIT || "1" },
-});
-if (result.error) throw result.error;
-if (result.status !== 0) process.exit(result.status ?? 1);
+run(engine, buildArgs);
+run(engine, runArgs);
+if (dryRun) process.exit(0);
 
 const iso = fs.readdirSync(output).find((name) => name.endsWith(".iso"));
 if (!iso) throw new Error(`The container build completed but no ISO was exported to ${output}.`);

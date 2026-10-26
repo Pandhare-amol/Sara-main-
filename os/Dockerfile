@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
-# Sara OS is built inside a Debian container so the same command works from
-# Docker Desktop on Windows/macOS and Docker/Podman on Linux.
+# Sara OS uses a Debian builder container so the same command works from Docker
+# Desktop on Windows/macOS and Docker/Podman on Linux. The image is later run as
+# a disposable privileged container because live-build must mount /proc/devpts.
 
 ARG NODE_IMAGE=node:20-bookworm-slim
 ARG PYTHON_IMAGE=python:3.11-slim-bookworm
@@ -32,7 +33,9 @@ ARG SARA_VERSION=dev
 ARG SARA_REVISION=unknown
 ARG SOURCE_DATE_EPOCH=0
 ENV DEBIAN_FRONTEND=noninteractive \
-    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    SARA_VERSION=${SARA_VERSION} \
+    SARA_REVISION=${SARA_REVISION}
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       live-build debootstrap xorriso squashfs-tools \
@@ -47,22 +50,9 @@ COPY --from=app-builder /bundle/app/ ./config/includes.chroot/opt/sara/app/
 COPY --from=app-builder /bundle/runtime/ ./config/includes.chroot/opt/sara/runtime/
 COPY --from=agent-builder /opt/sara/python-packages/ ./config/includes.chroot/opt/sara/python-packages/
 COPY build/icon.png ./config/includes.chroot/usr/share/icons/hicolor/256x256/apps/sara.png
+COPY os/build-inside-container.sh /usr/local/bin/build-sara-os-image
+RUN chmod 0755 /usr/local/bin/build-sara-os-image \
+    auto/config config/includes.chroot/usr/local/bin/sara-session \
+    config/includes.chroot/etc/skel/Desktop/Sara.desktop
 
-RUN chmod 0755 auto/config config/includes.chroot/usr/local/bin/sara-session \
-    && chmod 0755 config/includes.chroot/etc/skel/Desktop/Sara.desktop \
-    && ./auto/config \
-    && lb build
-
-RUN set -eu; \
-    iso="$(find . -maxdepth 1 -type f -name '*.hybrid.iso' -print -quit)"; \
-    test -n "$iso"; \
-    mkdir -p /artifacts; \
-    output="SaraOS-${SARA_VERSION}-amd64.iso"; \
-    cp "$iso" "/artifacts/$output"; \
-    cd /artifacts; \
-    sha256sum "$output" > "$output.sha256"; \
-    printf '{\n  "name": "Sara OS",\n  "version": "%s",\n  "architecture": "amd64",\n  "base": "Debian 12 Bookworm",\n  "revision": "%s",\n  "artifact": "%s"\n}\n' \
-      "$SARA_VERSION" "$SARA_REVISION" "$output" > build-info.json
-
-FROM scratch AS artifact
-COPY --from=iso-builder /artifacts/ /
+ENTRYPOINT ["/usr/local/bin/build-sara-os-image"]

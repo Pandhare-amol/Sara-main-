@@ -37,7 +37,7 @@ npm run os:build -- --no-cache
 npm run os:build -- --dry-run
 ```
 
-The builder refuses to overwrite an existing ISO unless `--force` is passed. The ISO build downloads Debian packages and container base images, so it requires internet access and can take substantial time.
+The builder refuses to overwrite an existing ISO unless `--force` is passed. The ISO build downloads Debian packages and container base images, so it requires internet access and can take substantial time. Debian `live-build` must mount `/proc` and `/dev/pts` inside its chroot, so the script runs the purpose-built, disposable builder container with `--privileged`. Inspect `os/Dockerfile` and `os/build-inside-container.sh` before building on a shared machine. Sara and the resulting desktop never run as privileged containers.
 
 ## Boot and install
 
