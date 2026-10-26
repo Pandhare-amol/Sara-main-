@@ -57,7 +57,7 @@ class FileExtTests(unittest.TestCase):
         document.write_text("hello", encoding="utf-8")
         with patch.object(tools_files_ext.platform, "system", return_value="Linux"), patch.object(
             tools_files_ext.shutil, "which", return_value="/usr/bin/xdg-open"
-        ), patch("subprocess.Popen") as popen:
+        ), patch.object(tools_files_ext.os, "access", return_value=False), patch("subprocess.Popen") as popen:
             result = tools_files_ext.open_path({"path": str(document)})
         self.assertEqual(result["method"], "xdg_open")
         self.assertEqual(popen.call_args.args[0], ["/usr/bin/xdg-open", str(document)])
