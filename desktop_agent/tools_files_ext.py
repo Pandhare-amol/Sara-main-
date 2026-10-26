@@ -43,7 +43,7 @@ KINDS = {
     "audio": {".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus"},
     "document": {".pdf", ".doc", ".docx", ".txt", ".md", ".rtf", ".odt", ".ppt", ".pptx", ".xls", ".xlsx", ".csv"},
     "archive": {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"},
-    "executable": {".exe", ".msi", ".msix", ".appx", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".jse", ".wsf", ".scr", ".com", ".jar", ".reg", ".lnk", ".hta", ".cpl"},
+    "executable": {".exe", ".msi", ".msix", ".appx", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".jse", ".wsf", ".scr", ".com", ".jar", ".reg", ".lnk", ".hta", ".cpl", ".sh", ".bash", ".zsh", ".desktop", ".appimage", ".run", ".bin", ".deb", ".rpm"},
     "design": {".psd", ".blend", ".fbx", ".obj", ".pmx", ".ai", ".xcf", ".kra"},
 }
 PARTIAL_SUFFIXES = {".crdownload", ".part", ".partial", ".tmp", ".download"}
@@ -207,7 +207,11 @@ def copy_file(args: Dict[str, Any]) -> Dict[str, Any]:
 @register("openPath")
 def open_path(args: Dict[str, Any]) -> Dict[str, Any]:
     path = _resolve_file(args.get("path"), must_exist=True)
-    if path.is_file() and kind_of(path) == "executable" and not args.get("allow_executable"):
+    executable = path.is_file() and (
+        kind_of(path) == "executable"
+        or (platform.system() != "Windows" and os.access(path, os.X_OK))
+    )
+    if executable and not args.get("allow_executable"):
         raise ToolError(
             "CONFIRMATION_REQUIRED: this is an executable, installer or script. "
             "It will only be opened after the user explicitly confirms."
@@ -215,12 +219,44 @@ def open_path(args: Dict[str, Any]) -> Dict[str, Any]:
     if args.get("select") and path.exists():
         import subprocess
 
-        subprocess.Popen(["explorer.exe", "/select,", str(path)])
-        return {"result": f"Showed {path.name} in File Explorer.", "path": str(path), "method": "explorer_select"}
-    if platform.system() != "Windows":
-        raise ToolError("openPath is implemented for Windows.")
-    os.startfile(str(path))  # type: ignore[attr-defined]
-    return {"result": f"Opened {path.name}.", "path": str(path), "kind": kind_of(path) if path.is_file() else "folder"}
+        if platform.system() == "Windows":
+            subprocess.Popen(["explorer.exe", "/select,", str(path)])
+            return {"result": f"Showed {path.name} in File Explorer.", "path": str(path), "method": "explorer_select"}
+        if platform.system() == "Linux":
+            thunar = shutil.which("thunar")
+            if not thunar:
+                raise ToolError("Selecting a file requires the Thunar file manager on Linux.")
+            subprocess.Popen([thunar, "--select", str(path)], close_fds=True, start_new_session=True)
+            return {
+                "result": f"Asked Files to reveal and select {path.name}.",
+                "path": str(path), "method": "thunar_select",
+            }
+        raise ToolError("Selecting a file is unsupported on this platform.")
+    if platform.system() == "Windows":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+        method = "windows_default_app"
+    elif platform.system() == "Linux":
+        import subprocess
+
+        opener = shutil.which("xdg-open")
+        if not opener:
+            raise ToolError("The Linux default-application opener (xdg-open) is not installed.")
+        try:
+            subprocess.Popen(
+                [opener, str(path)], close_fds=True, start_new_session=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except OSError as error:
+            raise ToolError(f"Could not request the default Linux application: {error}") from error
+        method = "xdg_open"
+    else:
+        raise ToolError("Opening files with their default application is unsupported on this platform.")
+    return {
+        "result": f"Asked the default application to open {path.name}." if platform.system() == "Linux" else f"Opened {path.name}.",
+        "path": str(path),
+        "kind": kind_of(path) if path.is_file() else "folder",
+        "method": method,
+    }
 
 
 __all__ = ["known_folder", "kind_of", "recent_files", "stat_path", "copy_file", "open_path"]

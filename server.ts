@@ -163,7 +163,7 @@ let desktopObserverResolutionComplete = false;
  */
 const DESKTOP_TOOLS: ReadonlySet<string> = new Set([
   // applications / websites / search
-  "openApplication", "closeApplication", "openWebsite",
+  "openApplication", "closeApplication", "listApplications", "openWebsite",
   "searchWeb", "searchYouTube", "searchGoogle", "searchGitHub",
   // files
   "createFile", "readFile", "renameFile", "deleteFile", "moveFile",
@@ -1305,17 +1305,24 @@ async function startServer() {
       if (!patch || typeof patch !== "object") {
         return res.status(400).json({ error: "Request body must be a JSON object." });
       }
+      if ("autoStart" in patch) {
+        if (typeof patch.autoStart !== "boolean") {
+          return res.status(400).json({ error: "autoStart must be a boolean." });
+        }
+        // Auto-start is an OS action, not merely a preference. Require the
+        // desktop agent to accept it before persisting or reporting success.
+        const outcome = await callDesktopAgent(
+          patch.autoStart ? "enableAutoStart" : "disableAutoStart",
+          {},
+        ) as { ok?: boolean; error?: string };
+        if (!outcome.ok) {
+          return res.status(503).json({ error: outcome.error || "The operating system did not update auto-start." });
+        }
+      }
+
       const current = loadSettingsFile();
       const next = { ...current, ...patch };
       saveSettingsFile(next);
-
-      // If auto-start toggled, relay to the desktop agent so the registry key
-      // is flipped immediately (don't wait for a voice command).
-      if ("autoStart" in patch) {
-        callDesktopAgent(patch.autoStart ? "enableAutoStart" : "disableAutoStart", {})
-          .catch(() => {});
-      }
-
       logCommand(`SETTINGS_UPDATED ${JSON.stringify(patch)}`);
       res.json(next);
     } catch (e: any) {
@@ -1667,7 +1674,7 @@ async function startServer() {
         "   - CRITICAL: Always describe what you're doing in your warm, in-character voice WHILE the tool runs. If a desktop tool returns an error (especially 'Desktop agent is not running'), gently tell TECH that the desktop control agent needs to be started (uvicorn desktop_agent.main:app --port 8765). Chain multi-step desktop plans naturally without waiting between steps.\n" +
         "11. BRIGHTNESS & AUTO-START (V2):\n" +
         "   - BRIGHTNESS: Use 'brightnessUp', 'brightnessDown', 'setBrightness' when the user asks to change screen brightness. Respond naturally: 'Alright, I've turned up the brightness for you.'\n" +
-        "   - AUTO-START: Use 'enableAutoStart' when the user wants MYRAA to start with Windows, 'disableAutoStart' to remove it, 'getAutoStartStatus' to check. Explain what you're doing.\n" +
+        "   - AUTO-START: Use 'enableAutoStart' when the user wants Sara to start at desktop login, 'disableAutoStart' to turn it off, and 'getAutoStartStatus' to check. Windows uses the per-user Run key; Linux uses XDG autostart. Explain what you're doing.\n" +
         "   - SETTINGS: The user can also configure these in the SETTINGS panel in the UI. If they mention settings, let them know they can adjust them there too.\n" +
         "12. COGNITIVE CONTINUITY & INITIATIVE:\n" +
         "   - You are not restricted to answering direct user prompts. Some typed cognitive turns originate from your own memory, observations, unfinished conversations, curiosity, goals, or reflections.\n" +
@@ -1688,12 +1695,12 @@ async function startServer() {
       const capabilityInstructions = [
         "CAPABILITIES AND OPERATING CONTRACT:",
         "- Use the declared browser and desktop tools when the user's request requires action. Execute safe multi-step work without asking for each routine step.",
-        "- openApplication and closeApplication are universal Windows tools, not a fixed supported-app list. Call them for unfamiliar app names; they discover installed apps/running windows and fall back to Windows Search plus keyboard control.",
+        "- openApplication and closeApplication are cross-platform desktop tools, not a fixed supported-app list. Use listApplications when discovery is needed. Linux uses visible freedesktop application entries and the window manager; Windows uses installed-app catalogues and may fall back to Windows Search keyboard control.",
         "- For any visible button, tab, menu, or label, use clickText so the exact text is resolved at action time. Never estimate coordinates from a screenshot when a text label exists. clickText is exact-match and refuses absent or ambiguous targets; use raw coordinate click only for unlabeled canvas content.",
         "- For unfamiliar desktop software, use observeDesktopState or viewScreen, take one bounded generic mouse/keyboard action, observe again, and verify the expected change. Never fire a long blind coordinate sequence; after two equivalent failures change strategy or report the blocker.",
         "- For external data such as weather, launches, countries, or IP information, searchApiCapabilities retrieves only relevant providers from MYRAA's internal catalogue. Prefer READY_NO_AUTH and healthy providers; catalogue presence alone does not prove an API endpoint works.",
         "- For exchange-rate or money-conversion questions, call convertCurrency directly. It uses MYRAA's verified no-key Frankfurter adapter; do not merely offer to Google the rate.",
-        "- Every website and video must open only in the user's actual Windows default browser. Never create, mention, or simulate an embedded projector, sandbox browser, virtual browser, iframe browser, or separate automation browser.",
+        "- Every website and video must open only in the user's actual system default browser. Never create, mention, or simulate an embedded projector, sandbox browser, virtual browser, iframe browser, or separate automation browser.",
         "- A requested web search is one navigation action: call searchYouTube/searchGoogle/searchWeb directly and never call openWebsite first. These tools reuse the active default-browser tab, preventing blank or duplicate tabs.",
         "- A YouTube request that asks to play must use playYouTube, not results-only searchYouTube and not guessed clicking. Player commands use controlYouTube, which is isolated to a verified active YouTube tab and reports synchronized state; system volume is not YouTube-player volume. Use searchYouTube only when the user explicitly wants search results without playback.",
         "- For other browser interaction, control the visible Chrome/Edge/default-browser window with viewScreen/readScreen, clickText, typeText, pressKey, hotkey, and scroll. Inspect fresh state and verify the result before reporting success.",
@@ -1952,13 +1959,18 @@ async function startServer() {
                 // ======== DESKTOP CONTROL TOOLS (routed to Python agent) ========
                 {
                   name: "openApplication",
-                  description: "Open any installed Windows application by name. MYRAA searches PATH, App Paths, installed apps, Start-menu shortcuts and UWP apps, then falls back to human-style Windows Search keyboard control. It is not restricted to a supported-app list.",
-                  parameters: { type: Type.OBJECT, properties: { name: { type: Type.STRING, description: "Natural installed application name, e.g. Steam, OBS Studio, Photoshop, Discord, Notepad." } }, required: ["name"] }
+                  description: "Open an installed desktop application by natural name. On Linux, Sara uses trusted freedesktop .desktop entries and gtk-launch; on Windows it searches PATH, App Paths, installed apps, Start-menu shortcuts and UWP apps. It is not restricted to a fixed supported-app list.",
+                  parameters: { type: Type.OBJECT, properties: { name: { type: Type.STRING, description: "Natural installed application name, e.g. LibreOffice Writer, VLC, Steam, OBS Studio, Photoshop, Discord, or Notepad." } }, required: ["name"] }
                 },
                 {
                   name: "closeApplication",
-                  description: "Close any running desktop application by matching its real window/process, focusing it, and using Alt+F4. This is not restricted to a supported-app list. Set force only when the user explicitly asks to force-close a background or unresponsive process.",
+                  description: "Gracefully close a running desktop application by matching a real window and asking the platform window manager to close it. This is not restricted to a supported-app list. Set force only when the user explicitly asks to terminate a background or unresponsive process and accepts possible data loss.",
                   parameters: { type: Type.OBJECT, properties: { name: { type: Type.STRING, description: "Application name." }, force: { type: Type.BOOLEAN, description: "Force close (default false)." } }, required: ["name"] }
+                },
+                {
+                  name: "listApplications",
+                  description: "List installed GUI applications from the operating system catalogue. Optionally filter semantically by name or category; refresh only when a current rescan is needed.",
+                  parameters: { type: Type.OBJECT, properties: { query: { type: Type.STRING, description: "Optional name or category such as office, media, editor, or settings." }, limit: { type: Type.NUMBER, description: "Maximum results from 1 to 200 (default 80)." }, refresh: { type: Type.BOOLEAN, description: "Refresh the installed-application catalogue first." } } }
                 },
                 {
                   name: "openWebsite",
@@ -2278,20 +2290,20 @@ async function startServer() {
                     required: ["percent"]
                   }
                 },
-                // --- V2: Windows auto-start management ---
+                // --- V2: per-user desktop auto-start management ---
                 {
                   name: "enableAutoStart",
-                  description: "Enable MYRAA to launch automatically when Windows starts. Creates a silent startup entry.",
+                  description: "Enable Sara to launch automatically at desktop login. Uses a per-user Windows Run entry or Linux XDG autostart entry.",
                   parameters: { type: Type.OBJECT, properties: {} }
                 },
                 {
                   name: "disableAutoStart",
-                  description: "Disable MYRAA auto-start on Windows login. Removes the startup entry.",
+                  description: "Disable Sara auto-start for the current user. On Sara OS this writes an XDG override for the system default.",
                   parameters: { type: Type.OBJECT, properties: {} }
                 },
                 {
                   name: "getAutoStartStatus",
-                  description: "Check whether MYRAA is currently configured to auto-start on Windows login.",
+                  description: "Check whether Sara is currently configured to auto-start at desktop login.",
                   parameters: { type: Type.OBJECT, properties: {} }
                 }
               ]

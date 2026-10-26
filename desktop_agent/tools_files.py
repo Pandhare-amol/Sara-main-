@@ -16,6 +16,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import platform
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -210,7 +211,14 @@ def open_folder(args: Dict[str, Any]) -> Dict[str, Any]:
     elif platform.system() == "Darwin":
         subprocess.Popen(["open", str(folder)], close_fds=True)
     else:
-        subprocess.Popen(["xdg-open", str(folder)], close_fds=True)
+        opener = shutil.which("xdg-open")
+        if not opener:
+            raise ToolError("The Linux default-application opener (xdg-open) is not installed.")
+        try:
+            subprocess.Popen([opener, str(folder)], close_fds=True, start_new_session=True)
+        except OSError as error:
+            raise ToolError(f"Could not request the Linux file manager: {error}") from error
+        return {"result": f"Asked the default Linux file manager to open: {folder}", "path": str(folder), "method": "xdg_open"}
     return {"result": f"Opened folder: {folder}", "path": str(folder)}
 
 

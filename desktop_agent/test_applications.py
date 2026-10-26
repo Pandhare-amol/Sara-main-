@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from desktop_agent.registry import ToolError
@@ -31,6 +33,63 @@ class ApplicationDiscoveryTests(unittest.TestCase):
         self.assertEqual(launch.call_args.args[0]["exe"], "thunar")
         self.assertEqual(result["application"], "Files")
 
+    def test_linux_desktop_catalogue_filters_hidden_entries_and_never_runs_exec(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "org.example.Editor.desktop").write_text(
+                """[Desktop Entry]
+Type=Application
+Name=Example Editor
+Exec=example-editor --new-window %F
+Categories=Utility;TextEditor;
+StartupWMClass=ExampleEditor
+""",
+                encoding="utf-8",
+            )
+            (root / "hidden.desktop").write_text(
+                """[Desktop Entry]
+Type=Application
+Name=Hidden Tool
+Exec=do-not-run
+NoDisplay=true
+""",
+                encoding="utf-8",
+            )
+            with patch.object(tools_applications, "_linux_desktop_dirs", return_value=[root]), patch.object(
+                tools_applications.subprocess, "Popen"
+            ) as popen:
+                applications = list(tools_applications._linux_desktop_candidates())
+        popen.assert_not_called()
+        self.assertEqual(len(applications), 1)
+        self.assertEqual(applications[0]["label"], "Example Editor")
+        self.assertEqual(applications[0]["desktop_id"], "org.example.Editor")
+        self.assertEqual(applications[0]["image"], "ExampleEditor")
+
+    @patch.object(tools_applications.shutil, "which", return_value="/usr/bin/gtk-launch")
+    @patch.object(tools_applications.subprocess, "Popen")
+    @patch.object(tools_applications.platform, "system", return_value="Linux")
+    def test_linux_discovered_application_uses_gtk_launch_not_exec(self, _system, popen, _which) -> None:
+        tools_applications._launch_discovered(
+            {
+                "label": "Example Editor",
+                "desktop_id": "org.example.Editor",
+                "path": "/usr/share/applications/org.example.Editor.desktop",
+                "method": "desktop_entry",
+            }
+        )
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/gtk-launch", "org.example.Editor"])
+
+    @patch.object(tools_applications, "_indexed_candidates")
+    @patch.object(tools_applications.platform, "system", return_value="Linux")
+    def test_list_applications_filters_linux_catalogue(self, _system, indexed) -> None:
+        indexed.return_value = [
+            {"label": "LibreOffice Writer", "desktop_id": "libreoffice-writer", "categories": "Office,WordProcessor", "method": "desktop_entry"},
+            {"label": "VLC Media Player", "desktop_id": "vlc", "categories": "AudioVideo,Player", "method": "desktop_entry"},
+        ]
+        result = tools_applications.list_applications({"query": "office", "limit": 10})
+        self.assertEqual([item["name"] for item in result["applications"]], ["LibreOffice Writer"])
+        self.assertEqual(result["applications"][0]["id"], "libreoffice-writer")
+
     @patch.object(tools_applications.subprocess, "run")
     @patch.object(tools_applications.platform, "system", return_value="Linux")
     def test_sara_os_matches_semantic_x11_window(self, _system, run) -> None:
@@ -51,7 +110,8 @@ class ApplicationDiscoveryTests(unittest.TestCase):
     @patch.object(tools_applications, "_matching_windows")
     def test_arbitrary_visible_app_closes_with_keyboard(self, matching, close_windows) -> None:
         matching.return_value = [{"hwnd": 10, "title": "Example App", "score": 1000}]
-        result = tools_applications.close_application({"name": "Example App"})
+        with patch.object(tools_applications.platform, "system", return_value="Windows"):
+            result = tools_applications.close_application({"name": "Example App"})
         close_windows.assert_called_once()
         self.assertEqual(result["method"], "keyboard_alt_f4")
 

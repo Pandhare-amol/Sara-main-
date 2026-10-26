@@ -463,7 +463,7 @@ export function SettingsPanel({ isOpen, onClose, settings, onChange, appSettings
                 {section === "general" && (
                   <div className="space-y-5">
                     <Group title="Startup & appearance">
-                      <ToggleRow label="Launch at Windows startup" description="Start Sara quietly when you log in." checked={settings.autoStart}
+                      <ToggleRow label="Launch at login" description="Start Sara quietly when you log in." checked={settings.autoStart}
                         onChange={(v) => {
                           onChange({ autoStart: v });
                           void fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoStart: v }) }).catch(() => {});

@@ -29,11 +29,13 @@ if (!failures.length) {
   const launcher = read("os/live/config/includes.chroot/usr/local/bin/sara-session");
   const dockerfile = read("os/Dockerfile");
   const linuxRequirements = read("desktop_agent/requirements-linux.txt");
+  const applicationTools = read("desktop_agent/tools_applications.py");
+  const pcTools = read("desktop_agent/tools_pc.py");
 
   for (const token of ["--binary-images iso-hybrid", "--architectures amd64", "--debian-installer live", "username=sara"]) {
     if (!config.includes(token)) failures.push(`live-build config is missing ${token}`);
   }
-  for (const pkg of ["linux-image-amd64", "live-boot", "grub-efi-amd64-bin", "chromium", "xfce4", "network-manager", "gnome-keyring", "libsecret-tools"]) {
+  for (const pkg of ["linux-image-amd64", "live-boot", "grub-efi-amd64-bin", "chromium", "xfce4", "network-manager", "gnome-keyring", "libsecret-tools", "libreoffice-writer", "libreoffice-calc", "libreoffice-impress", "vlc", "evince", "geany", "pavucontrol", "brightnessctl", "libgtk-3-bin"]) {
     if (!new RegExp(`^${pkg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m").test(packages)) failures.push(`package list is missing ${pkg}`);
   }
   for (const token of ["http://127.0.0.1:3000", "MYRAA_DATA_DIR", "MYRAA_SECRET_BACKEND=libsecret", "NODE_ENV=production"]) {
@@ -47,6 +49,12 @@ if (!failures.length) {
   if (!outerBuilder.includes('"--privileged"')) failures.push("outer builder must grant the disposable live-build container mount privileges");
   for (const forbidden of ["pywin32", "pywinauto", "pycaw", "winrt-"]) {
     if (new RegExp(`^${forbidden}`, "m").test(linuxRequirements)) failures.push(`Linux requirements include Windows-only dependency ${forbidden}`);
+  }
+  for (const token of ["_linux_desktop_candidates", 'register("listApplications")', "gtk-launch"]) {
+    if (!applicationTools.includes(token)) failures.push(`Linux application discovery is missing ${token}`);
+  }
+  for (const token of ["wpctl", "brightnessctl", 'systemctl", "suspend"']) {
+    if (!pcTools.includes(token)) failures.push(`Linux desktop controls are missing ${token}`);
   }
 
   const osTree = walk(path.join(root, "os"))

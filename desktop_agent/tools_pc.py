@@ -17,6 +17,8 @@ from __future__ import annotations
 import ctypes
 import os
 import platform
+import re
+import shutil
 import subprocess
 import time
 from typing import Any, Dict, Optional
@@ -27,7 +29,30 @@ from .tools_confirmation import ACTION_LABEL, consume_token
 
 # --- Volume backend (lazy) ----------------------------------------------------
 
-_vol_backend = None  # one of "pycaw" | "media_keys" | None
+_vol_backend = None  # one of "pycaw" | "pipewire" | "media_keys" | None
+
+
+def _wpctl(*arguments: str) -> subprocess.CompletedProcess[str]:
+    executable = shutil.which("wpctl")
+    if not executable:
+        raise ToolError("PipeWire volume control is unavailable because wpctl is not installed.")
+    try:
+        return subprocess.run(
+            [executable, *arguments], capture_output=True, text=True,
+            timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ToolError(f"PipeWire volume control failed: {error}") from error
+
+
+def _pipewire_state() -> tuple[float, bool]:
+    result = _wpctl("get-volume", "@DEFAULT_AUDIO_SINK@")
+    if result.returncode != 0:
+        raise ToolError(result.stderr.strip() or "Could not read the default PipeWire audio sink.")
+    match = re.search(r"Volume:\s*([0-9]+(?:\.[0-9]+)?)", result.stdout)
+    if not match:
+        raise ToolError("wpctl returned an unrecognized volume state.")
+    return max(0.0, min(1.5, float(match.group(1)))), "[MUTED]" in result.stdout.upper()
 
 
 def _init_pycaw():
@@ -48,7 +73,9 @@ def _init_pycaw():
 def _get_volume_interface():
     global _vol_backend
     if _vol_backend is None:
-        if platform.system() != "Windows":
+        if platform.system() == "Linux" and shutil.which("wpctl"):
+            _vol_backend = "pipewire"
+        elif platform.system() != "Windows":
             _vol_backend = "media_keys"
         else:
             iface = _init_pycaw()
@@ -62,8 +89,10 @@ _VOL_CACHE: Dict[str, Any] = {}
 
 
 def _current_volume() -> float:
-    """Returns current master volume in 0.0..1.0 (best effort)."""
+    """Return the verified master volume in normalized 0.0..1.0 units."""
     backend = _get_volume_interface()
+    if backend == "pipewire":
+        return min(1.0, _pipewire_state()[0])
     if backend == "pycaw":
         iface = _VOL_CACHE.get("iface") or _init_pycaw()
         if iface is not None:
@@ -72,12 +101,22 @@ def _current_volume() -> float:
                 return float(iface.GetMasterVolumeLevelScalar())
             except Exception:
                 pass
-    return 0.5  # unknown
+    if backend == "media_keys":
+        raise ToolError("Exact system volume cannot be read on this platform.")
+    raise ToolError("System volume is unavailable.")
 
 
 def _set_volume_scalar(value: float) -> None:
     value = max(0.0, min(1.0, float(value)))
     backend = _get_volume_interface()
+    if backend == "pipewire":
+        result = _wpctl("set-volume", "@DEFAULT_AUDIO_SINK@", f"{round(value * 100)}%")
+        if result.returncode != 0:
+            raise ToolError(result.stderr.strip() or "PipeWire refused the volume change.")
+        actual, _muted = _pipewire_state()
+        if abs(actual - value) > 0.03:
+            raise ToolError(f"PipeWire did not verify the requested volume (reported {actual:.2f}).")
+        return
     if backend == "pycaw":
         iface = _VOL_CACHE.get("iface") or _init_pycaw()
         if iface is not None:
@@ -87,7 +126,7 @@ def _set_volume_scalar(value: float) -> None:
                 return
             except Exception:
                 pass  # fall through to media keys
-    _set_volume_via_keys(value)
+    raise ToolError("Exact volume setting is unavailable because the system audio level cannot be read.")
 
 
 # VK codes for media keys
@@ -113,23 +152,27 @@ def _press_vk(vk: int) -> None:
                 pyautogui.press("volumedown")
             elif vk == VK_VOLUME_MUTE:
                 pyautogui.press("volumemute")
-        except Exception:
-            pass
+        except Exception as error:
+            raise ToolError(f"Could not send a system volume key: {error}") from error
 
 
-def _set_volume_via_keys(target: float) -> None:
-    """Approximate target volume by stepping media keys. Coarse but reliable."""
-    current = _current_volume()
-    diff = target - current
-    # ~2% per keypress is a reasonable Windows approximation.
-    steps = int(abs(diff) / 0.02) + 1
-    vk = VK_VOLUME_UP if diff > 0 else VK_VOLUME_DOWN
-    for _ in range(min(steps, 50)):
+def _press_volume_steps(vk: int, amount: float) -> int:
+    """Send bounded media-key steps when an exact volume API is unavailable."""
+    steps = max(1, min(20, int(round(max(0.01, amount) / 0.02))))
+    for _ in range(steps):
         _press_vk(vk)
         time.sleep(0.01)
+    return steps
 
 
-def _toggle_mute_pycaw() -> bool:
+def _toggle_mute_pycaw() -> Optional[bool]:
+    backend = _get_volume_interface()
+    if backend == "pipewire":
+        result = _wpctl("set-mute", "@DEFAULT_AUDIO_SINK@", "toggle")
+        if result.returncode != 0:
+            raise ToolError(result.stderr.strip() or "PipeWire refused the mute change.")
+        _volume, muted = _pipewire_state()
+        return muted
     iface = _VOL_CACHE.get("iface")
     if iface is None:
         iface = _init_pycaw()
@@ -142,7 +185,7 @@ def _toggle_mute_pycaw() -> bool:
             pass
     _press_vk(VK_VOLUME_MUTE)
     time.sleep(0.05)
-    return False
+    return None
 
 
 # --- Tool handlers -----------------------------------------------------------
@@ -150,18 +193,26 @@ def _toggle_mute_pycaw() -> bool:
 
 @register("volumeUp")
 def volume_up(args: Dict[str, Any]) -> Dict[str, Any]:
-    step = float(args.get("amount", 0.10))
+    step = max(0.01, min(1.0, float(args.get("amount", 0.10))))
+    backend = _get_volume_interface()
+    if backend == "media_keys":
+        steps = _press_volume_steps(VK_VOLUME_UP, step)
+        return {"result": "Sent a system volume-up request; the resulting level is not readable on this platform.", "backend": backend, "key_steps": steps}
     new = min(1.0, _current_volume() + step)
     _set_volume_scalar(new)
-    return {"result": f"Volume increased to {int(new * 100)}%."}
+    return {"result": f"Volume increased to {int(new * 100)}%.", "percent": int(new * 100), "backend": backend}
 
 
 @register("volumeDown")
 def volume_down(args: Dict[str, Any]) -> Dict[str, Any]:
-    step = float(args.get("amount", 0.10))
+    step = max(0.01, min(1.0, float(args.get("amount", 0.10))))
+    backend = _get_volume_interface()
+    if backend == "media_keys":
+        steps = _press_volume_steps(VK_VOLUME_DOWN, step)
+        return {"result": "Sent a system volume-down request; the resulting level is not readable on this platform.", "backend": backend, "key_steps": steps}
     new = max(0.0, _current_volume() - step)
     _set_volume_scalar(new)
-    return {"result": f"Volume decreased to {int(new * 100)}%."}
+    return {"result": f"Volume decreased to {int(new * 100)}%.", "percent": int(new * 100), "backend": backend}
 
 
 @register("setVolume")
@@ -174,45 +225,71 @@ def set_volume(args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError("Parameter 'percent' (0-100) is required.")
     pct = max(0.0, min(100.0, pct))
     _set_volume_scalar(pct / 100.0)
-    return {"result": f"Volume set to {int(pct)}%."}
+    return {"result": f"Volume set to {int(pct)}%.", "percent": int(pct), "backend": _get_volume_interface()}
 
 
 @register("muteToggle")
 def mute_toggle(args: Dict[str, Any]) -> Dict[str, Any]:
     muted = _toggle_mute_pycaw()
-    return {"result": "Muted." if muted else "Unmuted."}
+    backend = _get_volume_interface()
+    if muted is None:
+        return {"result": "Sent a system mute-toggle request; the resulting state is not readable on this platform.", "backend": backend}
+    return {"result": "Muted." if muted else "Unmuted.", "muted": muted, "backend": backend}
 
 
 # --- Gated power actions -----------------------------------------------------
 
 
+def _checked_system_command(command: list[str], description: str) -> None:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ToolError(f"Could not request {description}: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise ToolError(f"The operating system refused {description}: {detail}")
+
+
 def _run_power(action: str) -> str:
-    """Execute the actual OS power command. Caller must have confirmed first."""
+    """Execute a confirmed power action and report only OS-accepted requests."""
     system = platform.system()
     if action == "lock":
         if system == "Windows":
             ctypes.windll.user32.LockWorkStation()
             return "Computer locked."
-        return "Lock is only configured for Windows."
+        if system == "Linux":
+            if shutil.which("loginctl"):
+                _checked_system_command(["loginctl", "lock-session"], "screen lock")
+            elif shutil.which("xdg-screensaver"):
+                _checked_system_command(["xdg-screensaver", "lock"], "screen lock")
+            else:
+                raise ToolError("No Linux screen-lock service is installed.")
+            return "Linux session accepted the screen-lock request."
+        raise ToolError("Screen lock is unsupported on this platform.")
     if action == "sleep":
         if system == "Windows":
-            # suspend: standby
             os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
             return "Computer going to sleep."
-        subprocess.run(["systemctl", "suspend"], check=False)
-        return "Computer going to sleep."
+        if system != "Linux":
+            raise ToolError("System suspend is unsupported on this platform.")
+        _checked_system_command(["systemctl", "suspend"], "system suspend")
+        return "Linux system accepted the suspend request."
     if action == "restart":
         if system == "Windows":
-            subprocess.run(["shutdown", "/r", "/t", "5"], check=False)
+            _checked_system_command(["shutdown", "/r", "/t", "5"], "system restart")
             return "Computer restarting in 5 seconds."
-        subprocess.run(["shutdown", "-r", "now"], check=False)
-        return "Computer restarting."
+        if system != "Linux":
+            raise ToolError("System restart is unsupported on this platform.")
+        _checked_system_command(["systemctl", "reboot"], "system restart")
+        return "Linux system accepted the restart request."
     if action == "shutdown":
         if system == "Windows":
-            subprocess.run(["shutdown", "/s", "/t", "10"], check=False)
+            _checked_system_command(["shutdown", "/s", "/t", "10"], "system shutdown")
             return "Computer shutting down in 10 seconds."
-        subprocess.run(["shutdown", "-h", "now"], check=False)
-        return "Computer shutting down."
+        if system != "Linux":
+            raise ToolError("System shutdown is unsupported on this platform.")
+        _checked_system_command(["systemctl", "poweroff"], "system shutdown")
+        return "Linux system accepted the shutdown request."
     raise ToolError(f"Unknown power action '{action}'.")
 
 
@@ -238,14 +315,18 @@ def execute_power_action(args: Dict[str, Any]) -> Dict[str, Any]:
 # Helper for shell-level abort of a pending Windows shutdown/restart timer.
 @register("_cancelPowerTimer")
 def _cancel(args: Dict[str, Any]) -> Dict[str, Any]:  # pragma: no cover
-    subprocess.run(["shutdown", "/a"], check=False)
+    if platform.system() != "Windows":
+        raise ToolError("Pending power-timer cancellation is only available for Windows timers.")
+    result = subprocess.run(["shutdown", "/a"], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise ToolError(result.stderr.strip() or "Windows did not cancel a pending power timer.")
     return {"result": "Cancelled pending shutdown/restart timer."}
 
 
 # --- Brightness control ------------------------------------------------------
-# Uses screen_brightness_control when available (Windows/macOS). Degrades to a
-# WMI / powershell fallback on Windows, and to a clear "unsupported" message
-# otherwise. Lazy import so the agent still boots if the optional dep is missing.
+# Uses screen_brightness_control when available, brightnessctl on Linux, and a
+# WMI/PowerShell fallback on Windows. Missing hardware or authorization is
+# surfaced explicitly. Lazy import keeps the agent bootable without extras.
 
 _sbc = None  # cached module handle
 
@@ -272,6 +353,19 @@ def _current_brightness() -> int:
             if vals:
                 return int(round(sum(vals) / len(vals)))
         except Exception:  # noqa: BLE001
+            pass
+    if platform.system() == "Linux" and shutil.which("brightnessctl"):
+        try:
+            output = subprocess.check_output(
+                ["brightnessctl", "-m", "info"], text=True, timeout=5,
+            )
+            percentages = re.findall(r"(?:^|,)(\d+)%(?:,|$)", output.strip())
+            if percentages:
+                return max(0, min(100, int(percentages[-1])))
+            match = re.search(r"\((\d+)%\)", output)
+            if match:
+                return max(0, min(100, int(match.group(1))))
+        except Exception:
             pass
     # Windows WMI fallback via PowerShell (does not need extra deps).
     if platform.system() == "Windows":
@@ -303,6 +397,22 @@ def _set_brightness(pct: float) -> int:
             return int(pct)
         except Exception:  # noqa: BLE001
             pass
+    if platform.system() == "Linux" and shutil.which("brightnessctl"):
+        try:
+            result = subprocess.run(
+                ["brightnessctl", "set", f"{int(pct)}%"],
+                capture_output=True, text=True, timeout=8, check=False,
+            )
+            if result.returncode != 0:
+                raise ToolError(result.stderr.strip() or "brightnessctl refused the brightness change.")
+            actual = _current_brightness()
+            if abs(actual - int(pct)) > 3:
+                raise ToolError(f"Brightness did not verify at the requested level (reported {actual}%).")
+            return actual
+        except ToolError:
+            raise
+        except Exception as error:
+            raise ToolError(f"Could not set Linux brightness: {error}") from error
     if platform.system() == "Windows":
         # WMI setter requires a method call; shell out to PowerShell.
         try:

@@ -1,7 +1,7 @@
 """
-Windows auto-start management for MYRAA (V2).
+Per-user auto-start management for Sara on Windows and Linux desktops.
 
-Manages a single registry entry under
+On Windows, manages a single registry entry under
     HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Myraa
 which points directly at the packaged MYRAA executable. Source-development
 builds fall back to start-myraa-silent.bat. HKCU is used (no admin rights
@@ -12,14 +12,17 @@ Tools:
   - disableAutoStart  : remove the Run key
   - getAutoStartStatus: report whether the entry exists + its target
 
-Gracefully degrades on non-Windows platforms (returns a clear message instead
-of raising).
+On Linux, writes a per-user freedesktop XDG autostart entry (or a Hidden=true
+override for the Sara OS system default). Other platforms degrade explicitly.
 """
 
 from __future__ import annotations
 
+import configparser
 import os
+import shutil
 import sys
+from pathlib import Path
 from typing import Any, Dict
 
 from .registry import ToolError, register
@@ -135,13 +138,94 @@ def _read_run_value() -> str | None:
         return None
 
 
+# --- Linux XDG auto-start helpers --------------------------------------------
+
+
+def _is_linux() -> bool:
+    return sys.platform.startswith("linux")
+
+
+def _linux_autostart_path() -> Path:
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return config_home / "autostart" / "sara.desktop"
+
+
+def _linux_session_executable() -> str | None:
+    configured = os.environ.get("SARA_SESSION_EXECUTABLE", "").strip()
+    if configured and Path(configured).is_file() and os.access(configured, os.X_OK):
+        return configured
+    found = shutil.which("sara-session")
+    if found:
+        return found
+    installed = Path("/usr/local/bin/sara-session")
+    return str(installed) if installed.is_file() and os.access(installed, os.X_OK) else None
+
+
+def _write_linux_autostart(*, hidden: bool) -> Path:
+    path = _linux_autostart_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if hidden:
+        content = """[Desktop Entry]
+Type=Application
+Name=Sara
+Hidden=true
+"""
+    else:
+        executable = _linux_session_executable()
+        if not executable:
+            raise ToolError("Sara's Linux session launcher is not installed, so auto-start cannot be enabled.")
+        content = f"""[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Sara
+Comment=Open the Sara AI operating environment
+Exec={executable}
+Terminal=false
+X-GNOME-Autostart-enabled=true
+"""
+    try:
+        path.write_text(content, encoding="utf-8")
+        path.chmod(0o600)
+    except OSError as error:
+        raise ToolError(f"Could not update Linux auto-start: {error}") from error
+    return path
+
+
+def _linux_autostart_status() -> tuple[bool, str | None]:
+    user_entry = _linux_autostart_path()
+    if user_entry.is_file():
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.optionxform = str
+        try:
+            parser.read(user_entry, encoding="utf-8")
+            entry = parser["Desktop Entry"]
+            hidden = entry.get("Hidden", "false").casefold() in {"true", "1", "yes"}
+            enabled = entry.get("X-GNOME-Autostart-enabled", "true").casefold() not in {"false", "0", "no"}
+            return (not hidden and enabled), str(user_entry)
+        except (OSError, UnicodeError, KeyError, configparser.Error):
+            return False, str(user_entry)
+    for config_dir in os.environ.get("XDG_CONFIG_DIRS", "/etc/xdg").split(":"):
+        system_entry = Path(config_dir) / "autostart" / "sara.desktop"
+        if system_entry.is_file():
+            return True, str(system_entry)
+    return False, None
+
+
 # --- Tools -------------------------------------------------------------------
 
 @register("enableAutoStart")
 def enable_auto_start(args: Dict[str, Any]) -> Dict[str, Any]:
-    """Create the Windows startup entry for the installed executable."""
+    """Create a per-user Windows or freedesktop auto-start entry."""
+    if _is_linux():
+        launcher = _write_linux_autostart(hidden=False)
+        return {
+            "result": "Auto-start enabled. Sara will launch on the next Linux desktop login.",
+            "enabled": True,
+            "launcher": str(launcher),
+            "method": "xdg_autostart",
+        }
     if not _is_windows():
-        raise ToolError("Auto-start is only supported on Windows.")
+        raise ToolError("Auto-start is unsupported on this platform.")
     command, launcher = _startup_command()
     import winreg  # type: ignore[import-not-found]
 
@@ -161,9 +245,17 @@ def enable_auto_start(args: Dict[str, Any]) -> Dict[str, Any]:
 
 @register("disableAutoStart")
 def disable_auto_start(args: Dict[str, Any]) -> Dict[str, Any]:
-    """Remove the Windows startup entry."""
+    """Disable per-user startup, overriding a system XDG default if needed."""
+    if _is_linux():
+        launcher = _write_linux_autostart(hidden=True)
+        return {
+            "result": "Auto-start disabled for this Linux user.",
+            "enabled": False,
+            "launcher": str(launcher),
+            "method": "xdg_autostart_override",
+        }
     if not _is_windows():
-        raise ToolError("Auto-start is only supported on Windows.")
+        raise ToolError("Auto-start is unsupported on this platform.")
     existing = _read_run_value()
     if existing is None:
         return {"result": "Auto-start was already disabled.", "enabled": False}
@@ -188,8 +280,17 @@ def disable_auto_start(args: Dict[str, Any]) -> Dict[str, Any]:
 @register("getAutoStartStatus")
 def get_auto_start_status(args: Dict[str, Any]) -> Dict[str, Any]:
     """Report whether auto-start is currently enabled."""
+    if _is_linux():
+        enabled, launcher = _linux_autostart_status()
+        return {
+            "result": "Auto-start is ENABLED for the Linux desktop." if enabled else "Auto-start is DISABLED for the Linux desktop.",
+            "enabled": enabled,
+            "launcher": launcher,
+            "platform": sys.platform,
+            "method": "xdg_autostart",
+        }
     if not _is_windows():
-        return {"result": "Auto-start is only supported on Windows.", "enabled": False, "platform": sys.platform}
+        return {"result": "Auto-start is unsupported on this platform.", "enabled": False, "platform": sys.platform}
     value = _read_run_value()
     enabled = value is not None
     return {

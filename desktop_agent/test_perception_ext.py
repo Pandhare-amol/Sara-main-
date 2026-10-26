@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from desktop_agent.registry import TOOLS, ToolError, load_all
 
@@ -23,6 +24,8 @@ class FileExtTests(unittest.TestCase):
 
         self.assertEqual(kind_of(Path("a.PNG")), "image")
         self.assertEqual(kind_of(Path("setup.msi")), "executable")
+        self.assertEqual(kind_of(Path("install.sh")), "executable")
+        self.assertEqual(kind_of(Path("tool.AppImage")), "executable")
         self.assertEqual(kind_of(Path("notes.md")), "document")
         self.assertEqual(kind_of(Path("x.unknown")), "other")
 
@@ -45,6 +48,30 @@ class FileExtTests(unittest.TestCase):
         script.write_text("echo hi")
         with self.assertRaises(ToolError) as caught:
             TOOLS["openPath"]({"path": str(script)})
+        self.assertIn("CONFIRMATION_REQUIRED", caught.exception.message)
+
+    def test_linux_open_path_uses_xdg_open_without_shell(self):
+        from desktop_agent import tools_files_ext
+
+        document = self.root / "notes.txt"
+        document.write_text("hello", encoding="utf-8")
+        with patch.object(tools_files_ext.platform, "system", return_value="Linux"), patch.object(
+            tools_files_ext.shutil, "which", return_value="/usr/bin/xdg-open"
+        ), patch("subprocess.Popen") as popen:
+            result = tools_files_ext.open_path({"path": str(document)})
+        self.assertEqual(result["method"], "xdg_open")
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/xdg-open", str(document)])
+        self.assertNotIn("shell", popen.call_args.kwargs)
+
+    def test_linux_executable_bit_also_requires_confirmation(self):
+        from desktop_agent import tools_files_ext
+
+        binary = self.root / "helper"
+        binary.write_bytes(b"#!/bin/sh\n")
+        binary.chmod(0o700)
+        with patch.object(tools_files_ext.platform, "system", return_value="Linux"):
+            with self.assertRaises(ToolError) as caught:
+                tools_files_ext.open_path({"path": str(binary)})
         self.assertIn("CONFIRMATION_REQUIRED", caught.exception.message)
 
     def test_copy_never_overwrites_silently(self):

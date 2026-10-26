@@ -35,9 +35,12 @@ npm run os:validate
 npm run os:build
 ```
 
-Artifacts are exported to `out/sara-os/` with a SHA-256 checksum. The image includes no API key,
-personal data, memory, or restricted character asset. See [`os/README.md`](os/README.md) for VM/USB
-instructions, security boundaries, build requirements, and the exact cross-platform scope.
+Artifacts are exported to `out/sara-os/` with a SHA-256 checksum. The image includes LibreOffice,
+VLC, PDF/image/archive tools, Geany, scanner/disk/audio/Bluetooth utilities, and a bounded CLI toolkit.
+Sara discovers installed Linux GUI applications from freedesktop catalogues and uses native PipeWire,
+brightness, lock/power, XDG auto-start, and default-file facilities where available. The image includes
+no API key, personal data, memory, or restricted character asset. See [`os/README.md`](os/README.md)
+for VM/USB instructions, security boundaries, build requirements, and exact platform scope.
 
 ## Run it in development
 

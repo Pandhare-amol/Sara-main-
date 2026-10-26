@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { ACTION_MAP } from "../agent/actions/catalog";
 
 const root = path.resolve(import.meta.dirname, "..");
 const read = (file: string) => fs.readFileSync(path.join(root, file), "utf8");
@@ -30,6 +31,17 @@ test("Sara OS shell is local, non-root, sandboxed, and uses Secret Service", () 
   assert.doesNotMatch(launcher, /sudo|\bsu\s/);
 });
 
+test("Sara OS includes a bounded practical desktop and Linux control toolkit", () => {
+  const packages = read("os/live/config/package-lists/sara.list.chroot");
+  for (const required of [
+    "libreoffice-writer", "libreoffice-calc", "libreoffice-impress", "vlc", "evince",
+    "ristretto", "file-roller", "geany", "simple-scan", "pavucontrol", "blueman",
+    "gnome-disk-utility", "brightnessctl", "libgtk-3-bin", "ffmpeg", "git", "rsync",
+  ]) {
+    assert.match(packages, new RegExp(`^${required}$`, "m"));
+  }
+});
+
 test("Sara OS separates Linux dependencies from Windows automation packages", () => {
   const requirements = read("desktop_agent/requirements-linux.txt");
   for (const required of ["fastapi", "uvicorn", "pyautogui", "psutil", "Pillow", "mss", "Send2Trash"]) {
@@ -38,6 +50,20 @@ test("Sara OS separates Linux dependencies from Windows automation packages", ()
   for (const forbidden of ["pywin32", "pywinauto", "pycaw", "winrt-"]) {
     assert.doesNotMatch(requirements, new RegExp(`^${forbidden}`, "m"));
   }
+});
+
+test("Linux installed-application discovery is wired into voice and autonomous actions", () => {
+  const applicationTools = read("desktop_agent/tools_applications.py");
+  const registry = read("desktop_agent/registry.py");
+  const server = read("server.ts");
+  const executor = read("agent/actions/executor.ts");
+  assert.match(applicationTools, /register\("listApplications"\)/);
+  assert.match(applicationTools, /_linux_desktop_candidates/);
+  assert.match(applicationTools, /gtk-launch/);
+  assert.match(registry, /"listApplications"/);
+  assert.match(server, /name: "listApplications"/);
+  assert.equal(ACTION_MAP.get("app.list")?.changesUi, false);
+  assert.match(executor, /call\("listApplications"/);
 });
 
 test("Sara OS profile validator and dry-run builder pass without Docker", () => {

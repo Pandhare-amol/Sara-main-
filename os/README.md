@@ -6,12 +6,20 @@ Sara OS is a bootable **x86_64 Debian 12 live/install image** that makes Sara th
 
 - Hybrid ISO boot for UEFI and legacy BIOS PCs and virtual machines.
 - Debian's live installer, with a live session named `sara`.
-- XFCE, Chromium, NetworkManager, PipeWire, terminal, file manager, text editor, and calculator.
+- XFCE, Chromium, NetworkManager, PipeWire, terminal, file manager, text editor, calculator, screenshot tool, and task manager.
+- A bounded offline productivity set: LibreOffice Writer/Calc/Impress, VLC, Evince PDF viewer, Ristretto image viewer, File Roller, Geany, Simple Scan, Disks, Bluetooth Manager, and PulseAudio Volume Control.
+- Practical command-line tools including FFmpeg, Git, rsync, zip/unzip, p7zip, htop, jq, tree, lsof, and DNS utilities.
 - The production Sara frontend/backend and Linux-compatible local desktop agent.
 - Automatic Sara launch as a maximized Chromium application; closing it reveals the regular desktop.
 - Per-user state under `~/.local/share/sara` and logs under `~/.local/state/sara`.
 - Gemini/provider credentials entered after boot. No API key, account, memory, or personal file is built into the ISO.
 - Secret Service (`gnome-keyring`/`libsecret`) storage selected by the Sara OS session instead of the generic Linux plaintext fallback.
+
+## Linux desktop integration
+
+Sara indexes visible freedesktop `.desktop` entries from the user's XDG data directory, the system application directories, and standard Flatpak/Snap export directories. Voice tools and autonomous `app.list`, `app.launch`, and `app.close` actions therefore work with installed applications beyond the built-in aliases. Launching uses the desktop entry ID through `gtk-launch`; Sara does not shell-execute untrusted `Exec=` text from a desktop file. Hidden/`NoDisplay` entries are excluded and `TryExec` requirements are honored.
+
+On Sara OS, master volume uses PipeWire's `wpctl`, laptop-panel brightness uses `brightnessctl` when hardware exposes a controllable backlight, screen lock/power requests use logind/systemd, auto-start uses a per-user XDG entry, and default-file opening uses `xdg-open`. Each integration checks command outcomes where the platform exposes them and reports missing hardware, services, or permissions instead of inventing success. Executable Linux files and scripts still require the existing explicit confirmation path.
 
 ## Build on Windows, macOS, or Linux
 

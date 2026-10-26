@@ -585,6 +585,17 @@ export class ActionExecutor {
         const response = await call("closeApplication", { name: args.name });
         return response.ok ? ok(`Closed ${short(args.name, 30)}`) : failed(response.error);
       }
+      case "app.list": {
+        const response = await call("listApplications", {
+          query: args.query,
+          limit: args.limit,
+          refresh: args.refresh,
+        });
+        if (!response.ok) return failed(response.error);
+        const payload = response.result as Record<string, unknown>;
+        const applications = Array.isArray(payload.applications) ? payload.applications : [];
+        return ok(`Found ${applications.length} installed applications`, { applications }, { changesUi: false });
+      }
       case "fs.known_folder": {
         const response = await call("knownFolder", { name: args.name });
         return response.ok ? ok(`Found the ${args.name} folder`, compact(response.result, ["path", "exists"]), { changesUi: false }) : failed(response.error);

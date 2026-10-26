@@ -19,16 +19,48 @@ xfce4-terminal
 mousepad
 galculator
 xfce4-taskmanager
+xfce4-screenshooter
 zenity
+
+# Useful offline desktop applications (bounded, maintained Debian packages)
+libreoffice-writer
+libreoffice-calc
+libreoffice-impress
+libreoffice-gtk3
+hunspell-en-us
+vlc
+evince
+ristretto
+file-roller
+p7zip-full
+unrar-free
+geany
+simple-scan
+gnome-disk-utility
+pavucontrol
+blueman
+bluez
 
 # Sara's browser shell and desktop integration
 chromium
 xdg-utils
+libgtk-3-bin
 wmctrl
 xdotool
 xprintidle
 curl
 ca-certificates
+brightnessctl
+ffmpeg
+git
+rsync
+zip
+unzip
+htop
+jq
+tree
+lsof
+dnsutils
 
 # Network and audio
 network-manager

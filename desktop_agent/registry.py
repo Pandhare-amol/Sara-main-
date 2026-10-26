@@ -62,6 +62,7 @@ DESKTOP_TOOL_NAMES = [
     # applications / websites / search
     "openApplication",
     "closeApplication",
+    "listApplications",
     "openWebsite",
     "searchWeb",
     "searchYouTube",
