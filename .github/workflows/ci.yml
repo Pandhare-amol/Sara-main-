@@ -129,3 +129,38 @@ jobs:
 
       - name: Build production application on Linux
         run: npm run build
+
+  # Build the full ISO only for Arena feature-branch pushes. Pull requests and
+  # main keep the fast profile checks above; release builds remain available
+  # through the manual Build Sara OS image workflow.
+  sara-os-image:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/')
+    needs: sara-os-profile
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Build bootable Sara OS ISO
+        run: npm run os:build
+
+      - name: Verify exported ISO checksum
+        working-directory: out/sara-os
+        run: sha256sum --check SaraOS-*.iso.sha256
+
+      - name: Upload Sara OS ISO and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: SaraOS-${{ github.sha }}-amd64
+          path: |
+            out/sara-os/SaraOS-*.iso
+            out/sara-os/SaraOS-*.iso.sha256
+            out/sara-os/build-info.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
