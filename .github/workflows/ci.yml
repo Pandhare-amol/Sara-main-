@@ -147,7 +147,17 @@ jobs:
           cache: npm
 
       - name: Build bootable Sara OS ISO
-        run: npm run os:build
+        shell: bash
+        run: |
+          set +e
+          npm run os:build > sara-os-build.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "Sara OS build failed; final 250 log lines follow:"
+            tail -n 250 sara-os-build.log
+            exit "$status"
+          fi
+          tail -n 40 sara-os-build.log
 
       - name: Verify exported ISO checksum
         working-directory: out/sara-os
