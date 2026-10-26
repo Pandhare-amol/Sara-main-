@@ -69,7 +69,9 @@ class FileExtTests(unittest.TestCase):
         binary = self.root / "helper"
         binary.write_bytes(b"#!/bin/sh\n")
         binary.chmod(0o700)
-        with patch.object(tools_files_ext.platform, "system", return_value="Linux"):
+        with patch.object(tools_files_ext.platform, "system", return_value="Linux"), patch.object(
+            tools_files_ext.os, "access", return_value=True
+        ):
             with self.assertRaises(ToolError) as caught:
                 tools_files_ext.open_path({"path": str(binary)})
         self.assertIn("CONFIRMATION_REQUIRED", caught.exception.message)

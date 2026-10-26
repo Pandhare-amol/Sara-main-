@@ -269,7 +269,7 @@ def _linux_desktop_dirs() -> list[Path]:
     """Freedesktop application roots in precedence order."""
     home = Path.home()
     data_home = Path(os.environ.get("XDG_DATA_HOME", home / ".local" / "share"))
-    data_dirs = [Path(item) for item in os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":") if item]
+    data_dirs = [Path(item) for item in os.environ.get("XDG_DATA_DIRS", f"/usr/local/share{os.pathsep}/usr/share").split(os.pathsep) if item]
     roots = [data_home / "applications"]
     roots.extend(root / "applications" for root in data_dirs)
     roots.extend([

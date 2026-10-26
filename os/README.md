@@ -76,16 +76,16 @@ The live session is ephemeral unless persistence is configured externally. An in
 
 ## Verified image-build evidence
 
-On 2026-10-26, GitHub Actions [run 40280682661](https://github.com/Pandhare-amol/Sara-main-/actions/runs/40280682661) successfully:
+On 2026-10-26, the `sara-os-image` job ([job 121648160741](https://github.com/Pandhare-amol/Sara-main-/actions/runs/40344545344/job/121648160741)) for commit `97badeeca9911db1c733fe3f9023511a4f9dcc26` successfully:
 
-1. validated the OS profile and its security contracts;
-2. built the production application on both Linux and Windows CI;
-3. ran Debian `live-build` in the disposable builder;
+1. passed the updated OS profile/application-tool contracts and Linux production build;
+2. resolved and installed the expanded Debian desktop/tool package set;
+3. ran Debian `live-build` in the disposable privileged builder;
 4. produced `SaraOS-1.5.2-amd64.iso`;
 5. verified its generated SHA-256 file; and
-6. uploaded artifact `SaraOS-069126a2c8ef59b019d5c1cd18d31466c038ed4a-amd64` (artifact ID `12632281987`, archive size 2,147,484,342 bytes, seven-day retention).
+6. uploaded artifact `SaraOS-97badeeca9911db1c733fe3f9023511a4f9dcc26-amd64` (artifact ID `12662446439`, archive size 2,351,727,286 bytes, expiry `2026-11-02T15:12:40Z`).
 
-This proves image production and checksum verification. It does **not** claim a manual VM or physical-hardware boot, installer walkthrough, microphone/GPU/Wi-Fi compatibility, or live Linux desktop-control acceptance.
+This proves that the refreshed profile—including the new applications—resolves, builds into an ISO, passes checksum verification, and uploads successfully. It does **not** claim a manual VM or physical-hardware boot, installer walkthrough, persistence, microphone/GPU/Wi-Fi compatibility, or live Linux desktop-control acceptance.
 
 ## Validation limits
 

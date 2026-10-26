@@ -204,7 +204,7 @@ def _linux_autostart_status() -> tuple[bool, str | None]:
             return (not hidden and enabled), str(user_entry)
         except (OSError, UnicodeError, KeyError, configparser.Error):
             return False, str(user_entry)
-    for config_dir in os.environ.get("XDG_CONFIG_DIRS", "/etc/xdg").split(":"):
+    for config_dir in os.environ.get("XDG_CONFIG_DIRS", "/etc/xdg").split(os.pathsep):
         system_entry = Path(config_dir) / "autostart" / "sara.desktop"
         if system_entry.is_file():
             return True, str(system_entry)
