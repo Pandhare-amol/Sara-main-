@@ -9,9 +9,11 @@ in a hard-coded allow-list.
 
 from __future__ import annotations
 
+import configparser
 import os
 import platform
 import re
+import shlex
 import shutil
 import json
 import subprocess
@@ -42,10 +44,57 @@ APP_COMMANDS: Dict[str, Dict[str, str]] = {
     "snipping tool": {"uwp": "ms-screenclip:", "image": "ScreenClippingHost.exe", "label": "Snipping Tool"},
 }
 
+# Sara OS ships these commands. Keeping a distinct map prevents Linux from
+# ever trying a same-named Windows executable or UWP URI.
+LINUX_APP_COMMANDS: Dict[str, Dict[str, str]] = {
+    "browser": {"exe": "chromium", "image": "chromium", "label": "Chromium"},
+    "chrome": {"exe": "chromium", "image": "chromium", "label": "Chromium"},
+    "chromium": {"exe": "chromium", "image": "chromium", "label": "Chromium"},
+    "files": {"exe": "thunar", "image": "thunar", "label": "Files"},
+    "file manager": {"exe": "thunar", "image": "thunar", "label": "Files"},
+    "file explorer": {"exe": "thunar", "image": "thunar", "label": "Files"},
+    "terminal": {"exe": "xfce4-terminal", "image": "xfce4-terminal", "label": "Terminal"},
+    "command prompt": {"exe": "xfce4-terminal", "image": "xfce4-terminal", "label": "Terminal"},
+    "text editor": {"exe": "mousepad", "image": "mousepad", "label": "Text Editor"},
+    "notepad": {"exe": "mousepad", "image": "mousepad", "label": "Text Editor"},
+    "code editor": {"exe": "geany", "image": "geany", "label": "Geany"},
+    "geany": {"exe": "geany", "image": "geany", "label": "Geany"},
+    "calculator": {"exe": "galculator", "image": "galculator", "label": "Calculator"},
+    "calc": {"exe": "galculator", "image": "galculator", "label": "Calculator"},
+    "settings": {"exe": "xfce4-settings-manager", "image": "xfce4-settings-manager", "label": "Settings"},
+    "task manager": {"exe": "xfce4-taskmanager", "image": "xfce4-taskmanager", "label": "Task Manager"},
+    "office": {"exe": "libreoffice", "image": "libreoffice", "label": "LibreOffice"},
+    "libreoffice": {"exe": "libreoffice", "image": "libreoffice", "label": "LibreOffice"},
+    "writer": {"exe": "lowriter", "image": "libreoffice-writer", "label": "LibreOffice Writer"},
+    "word processor": {"exe": "lowriter", "image": "libreoffice-writer", "label": "LibreOffice Writer"},
+    "spreadsheet": {"exe": "localc", "image": "libreoffice-calc", "label": "LibreOffice Calc"},
+    "excel": {"exe": "localc", "image": "libreoffice-calc", "label": "LibreOffice Calc"},
+    "presentation": {"exe": "loimpress", "image": "libreoffice-impress", "label": "LibreOffice Impress"},
+    "powerpoint": {"exe": "loimpress", "image": "libreoffice-impress", "label": "LibreOffice Impress"},
+    "media player": {"exe": "vlc", "image": "vlc", "label": "VLC Media Player"},
+    "vlc": {"exe": "vlc", "image": "vlc", "label": "VLC Media Player"},
+    "pdf viewer": {"exe": "evince", "image": "evince", "label": "Document Viewer"},
+    "document viewer": {"exe": "evince", "image": "evince", "label": "Document Viewer"},
+    "image viewer": {"exe": "ristretto", "image": "ristretto", "label": "Image Viewer"},
+    "photos": {"exe": "ristretto", "image": "ristretto", "label": "Image Viewer"},
+    "archive manager": {"exe": "file-roller", "image": "file-roller", "label": "Archive Manager"},
+    "screenshot": {"exe": "xfce4-screenshooter", "image": "xfce4-screenshooter", "label": "Screenshot"},
+    "audio settings": {"exe": "pavucontrol", "image": "pavucontrol", "label": "Audio Settings"},
+    "bluetooth": {"exe": "blueman-manager", "image": "blueman-manager", "label": "Bluetooth Manager"},
+    "disk utility": {"exe": "gnome-disks", "image": "gnome-disks", "label": "Disks"},
+    "scanner": {"exe": "simple-scan", "image": "simple-scan", "label": "Document Scanner"},
+}
+
 ALIASES = {
     "code": "vscode", "visual studio code": "vscode", "vs code": "vscode",
     "google chrome": "chrome", "microsoft edge": "edge", "settings app": "settings",
-    "windows explorer": "file explorer",
+    "windows explorer": "file explorer", "explorer": "file explorer",
+    "libreoffice writer": "writer", "microsoft word": "writer", "word": "writer",
+    "libreoffice calc": "spreadsheet", "libreoffice spreadsheet": "spreadsheet",
+    "libreoffice impress": "presentation", "slide editor": "presentation",
+    "video player": "media player", "movie player": "media player",
+    "picture viewer": "image viewer", "photo viewer": "image viewer",
+    "pdf reader": "pdf viewer", "sound settings": "audio settings",
 }
 
 
@@ -60,6 +109,8 @@ def _compact(value: Any) -> str:
 def _resolve_known_app(key: str) -> Optional[Dict[str, str]]:
     norm = _normalize_name(key)
     norm = ALIASES.get(norm, norm)
+    if platform.system() == "Linux":
+        return LINUX_APP_COMMANDS.get(norm)
     return APP_COMMANDS.get(norm)
 
 
@@ -214,6 +265,110 @@ def _uwp_candidates() -> Iterable[Dict[str, str]]:
         return
 
 
+def _linux_desktop_dirs() -> list[Path]:
+    """Freedesktop application roots in precedence order."""
+    home = Path.home()
+    data_home = Path(os.environ.get("XDG_DATA_HOME", home / ".local" / "share"))
+    data_dirs = [Path(item) for item in os.environ.get("XDG_DATA_DIRS", f"/usr/local/share{os.pathsep}/usr/share").split(os.pathsep) if item]
+    roots = [data_home / "applications"]
+    roots.extend(root / "applications" for root in data_dirs)
+    roots.extend([
+        home / ".local/share/flatpak/exports/share/applications",
+        Path("/var/lib/flatpak/exports/share/applications"),
+        Path("/var/lib/snapd/desktop/applications"),
+    ])
+    seen: set[str] = set()
+    ordered: list[Path] = []
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            ordered.append(root)
+    return ordered
+
+
+def _desktop_bool(section: configparser.SectionProxy, key: str) -> bool:
+    return str(section.get(key, "false")).strip().casefold() in {"1", "true", "yes"}
+
+
+def _desktop_executable(exec_line: str) -> str:
+    """Extract only the executable name for matching; never execute this text."""
+    cleaned = re.sub(r"%[fFuUdDnNickvm]", "", exec_line).strip()
+    try:
+        words = shlex.split(cleaned)
+    except ValueError:
+        return ""
+    if not words:
+        return ""
+    if words[0] == "env":
+        words = [word for word in words[1:] if "=" not in word]
+    return Path(words[0]).name if words else ""
+
+
+def _linux_desktop_candidates() -> Iterable[Dict[str, str]]:
+    """Enumerate trusted installed .desktop launchers without running Exec."""
+    claimed_ids: set[str] = set()
+    scanned = 0
+    for root in _linux_desktop_dirs():
+        if not root.is_dir():
+            continue
+        try:
+            paths = root.rglob("*.desktop")
+            for desktop_file in paths:
+                scanned += 1
+                if scanned > 2_500:
+                    return
+                try:
+                    relative = desktop_file.relative_to(root).with_suffix("")
+                    desktop_id = "-".join(relative.parts)
+                except ValueError:
+                    desktop_id = desktop_file.stem
+                if desktop_id in claimed_ids:
+                    continue
+                claimed_ids.add(desktop_id)
+                parser = configparser.ConfigParser(interpolation=None, strict=False)
+                parser.optionxform = str
+                try:
+                    parser.read(desktop_file, encoding="utf-8")
+                    entry = parser["Desktop Entry"]
+                except (OSError, UnicodeError, KeyError, configparser.Error):
+                    continue
+                if entry.get("Type", "Application") != "Application":
+                    continue
+                if _desktop_bool(entry, "Hidden") or _desktop_bool(entry, "NoDisplay"):
+                    continue
+                current_desktops = {
+                    item.casefold()
+                    for item in re.split(r"[:;]", os.environ.get("XDG_CURRENT_DESKTOP", ""))
+                    if item
+                }
+                only_show = {item.casefold() for item in entry.get("OnlyShowIn", "").split(";") if item}
+                not_show = {item.casefold() for item in entry.get("NotShowIn", "").split(";") if item}
+                if only_show and current_desktops and only_show.isdisjoint(current_desktops):
+                    continue
+                if not_show.intersection(current_desktops):
+                    continue
+                label = entry.get("Name", "").strip()
+                exec_line = entry.get("Exec", "").strip()
+                if not label or not exec_line:
+                    continue
+                try_exec = entry.get("TryExec", "").strip()
+                if try_exec and not (shutil.which(try_exec) or Path(try_exec).exists()):
+                    continue
+                image = entry.get("StartupWMClass", "").strip() or _desktop_executable(exec_line)
+                categories = ",".join(item for item in entry.get("Categories", "").split(";") if item)[:300]
+                yield {
+                    "label": label[:160],
+                    "desktop_id": desktop_id,
+                    "path": str(desktop_file),
+                    "image": image[:160],
+                    "categories": categories,
+                    "method": "desktop_entry",
+                }
+        except OSError:
+            continue
+
+
 # ---- installed-app index ---------------------------------------------------
 # Scanning Start-menu shortcuts and Store apps takes seconds (PowerShell's
 # Get-StartApps alone is 1-6 s cold), far too slow to do on every "open X".
@@ -226,13 +381,19 @@ _INDEX_MAX_AGE = 15 * 60
 
 
 def _index_cache_path() -> Optional[Path]:
+    if platform.system() == "Linux":
+        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        return base / "sara" / "app-index.json"
     base = os.environ.get("LOCALAPPDATA")
     return Path(base) / "MYRAA" / "app-index.json" if base else None
 
 
 def _build_index() -> None:
     try:
-        items = list(_shortcut_candidates()) + list(_uwp_candidates() or [])
+        if platform.system() == "Linux":
+            items = list(_linux_desktop_candidates())
+        else:
+            items = list(_shortcut_candidates()) + list(_uwp_candidates() or [])
         with _INDEX_LOCK:
             _INDEX["items"] = items
             _INDEX["built"] = time.time()
@@ -282,8 +443,8 @@ def _indexed_candidates(wait: float = 6.0) -> list[Dict[str, str]]:
 
 
 def warm_app_index() -> None:
-    """Called at agent start: cached index now, a fresh one in the background."""
-    if platform.system() != "Windows":
+    """Load the cached app catalogue and refresh it without blocking startup."""
+    if platform.system() not in {"Windows", "Linux"}:
         return
     _load_index_cache()
     _refresh_index_async()
@@ -291,12 +452,15 @@ def warm_app_index() -> None:
 
 def _discover_application(name: str) -> Optional[Dict[str, str]]:
     raw = str(name).strip()
-    direct = shutil.which(raw) or shutil.which(f"{raw}.exe")
+    direct = shutil.which(raw) or (shutil.which(f"{raw}.exe") if platform.system() == "Windows" else None)
     candidates: list[Dict[str, str]] = []
     if direct:
         candidates.append({"label": Path(direct).stem, "path": direct, "method": "path"})
-    candidates.extend(_registry_candidates(raw) or [])
-    candidates.extend(_indexed_candidates())
+    if platform.system() == "Windows":
+        candidates.extend(_registry_candidates(raw) or [])
+        candidates.extend(_indexed_candidates())
+    elif platform.system() == "Linux":
+        candidates.extend(_indexed_candidates(wait=2.0))
     ranked = sorted(
         ((candidate, _candidate_score(raw, candidate["label"])) for candidate in candidates),
         key=lambda item: item[1], reverse=True,
@@ -312,12 +476,16 @@ def _launch_known(spec: Dict[str, str]) -> None:
                 discovered = _discover_application(spec["label"])
                 executable = discovered.get("path") if discovered else None
             if not executable:
-                raise ToolError(f"Windows could not find the installed executable for {spec['label']}.")
-            subprocess.Popen(
-                [executable], shell=False, close_fds=True,
-                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
-                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-            )
+                raise ToolError(f"The operating system could not find the installed executable for {spec['label']}.")
+            popen_args: Dict[str, Any] = {"shell": False, "close_fds": True}
+            if platform.system() == "Windows":
+                popen_args["creationflags"] = (
+                    getattr(subprocess, "DETACHED_PROCESS", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                )
+            else:
+                popen_args["start_new_session"] = True
+            subprocess.Popen([executable], **popen_args)
         elif "shell" in spec:
             subprocess.Popen(["cmd.exe", "/c", "start", "", spec["shell"]], close_fds=True)
         elif "uwp" in spec:
@@ -332,13 +500,27 @@ def _launch_discovered(candidate: Dict[str, str]) -> None:
     try:
         if candidate.get("app_id"):
             subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{candidate['app_id']}"])
-        else:
+        elif platform.system() == "Windows":
             os.startfile(candidate["path"])
+        elif candidate.get("desktop_id"):
+            launcher = shutil.which("gtk-launch")
+            if not launcher:
+                raise ToolError("gtk-launch is unavailable; the desktop application cannot be started semantically.")
+            subprocess.Popen(
+                [launcher, candidate["desktop_id"]], shell=False, close_fds=True,
+                start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        else:
+            subprocess.Popen([candidate["path"]], shell=False, close_fds=True, start_new_session=True)
+    except ToolError:
+        raise
     except Exception as error:
         raise ToolError(f"Could not launch {candidate.get('label')}: {error}") from error
 
 
 def _launch_via_windows_search(name: str) -> None:
+    if platform.system() != "Windows":
+        raise ToolError(f"No installed application matching '{name}' was found on this system.")
     try:
         import pyautogui
 
@@ -354,7 +536,43 @@ def _launch_via_windows_search(name: str) -> None:
         ) from error
 
 
+def _matching_linux_windows(name: str) -> list[Dict[str, Any]]:
+    """Return X11 windows from wmctrl without reading their contents."""
+    try:
+        output = subprocess.run(
+            ["wmctrl", "-lpGx"], capture_output=True, text=True, timeout=3, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    query = _normalize_name(name)
+    known = _resolve_known_app(name)
+    expected = _compact(known.get("image", "")) if known else _compact(query)
+    matches: list[Dict[str, Any]] = []
+    for line in output.stdout.splitlines():
+        parts = line.split(None, 8)
+        if len(parts) < 9:
+            continue
+        window_id, _desktop, pid, _x, _y, _w, _h, window_class, title = parts
+        title_norm = _normalize_name(title)
+        class_norm = _compact(window_class)
+        score = 0
+        if query and query == title_norm:
+            score = 1_000
+        elif query and set(query.split()).issubset(set(title_norm.split())):
+            score = 800
+        if expected and expected in class_norm:
+            score = max(score, 950)
+        if score:
+            matches.append({
+                "hwnd": window_id, "pid": int(pid) if pid.isdigit() else 0,
+                "title": title, "process": window_class, "score": score,
+            })
+    return sorted(matches, key=lambda item: item["score"], reverse=True)
+
+
 def _matching_windows(name: str) -> list[Dict[str, Any]]:
+    if platform.system() == "Linux":
+        return _matching_linux_windows(name)
     if platform.system() != "Windows":
         return []
     try:
@@ -400,6 +618,17 @@ def _matching_windows(name: str) -> list[Dict[str, Any]]:
 
 
 def _close_windows_with_keyboard(matches: list[Dict[str, Any]]) -> int:
+    if platform.system() == "Linux":
+        closed = 0
+        for match in matches[:8]:
+            result = subprocess.run(
+                ["wmctrl", "-ic", str(match["hwnd"])],
+                capture_output=True, text=True, timeout=3, check=False,
+            )
+            if result.returncode == 0:
+                closed += 1
+        return closed
+
     import win32gui
     from .tools_windows import _focus
     import pyautogui
@@ -421,6 +650,53 @@ def _close_windows_with_keyboard(matches: list[Dict[str, Any]]) -> int:
     return closed
 
 
+@register("listApplications")
+def list_applications(args: Dict[str, Any]) -> Dict[str, Any]:
+    """List installed GUI applications from OS-owned catalogues."""
+    if args.get("refresh"):
+        _INDEX_READY.clear()
+        _refresh_index_async()
+    items = _indexed_candidates(wait=4.0)
+    query = str(args.get("query") or "").strip()
+    limit = max(1, min(200, int(args.get("limit", 80))))
+    ranked: list[tuple[int, Dict[str, str]]] = []
+    for item in items:
+        label = str(item.get("label") or "").strip()
+        if not label:
+            continue
+        score = _candidate_score(query, label) if query else 1
+        if query and score <= 0:
+            categories = str(item.get("categories") or "")
+            image = str(item.get("image") or "")
+            score = max(_candidate_score(query, categories.replace(",", " ")), _candidate_score(query, image))
+        if score > 0:
+            ranked.append((score, item))
+    ranked.sort(key=lambda pair: (-pair[0], pair[1].get("label", "").casefold()))
+    seen: set[str] = set()
+    applications: list[Dict[str, str]] = []
+    for _score, item in ranked:
+        label_key = item["label"].casefold()
+        if label_key in seen:
+            continue
+        seen.add(label_key)
+        applications.append({
+            "name": item["label"],
+            "id": item.get("desktop_id") or item.get("app_id") or "",
+            "categories": item.get("categories", ""),
+            "launcher": item.get("method", "installed_app"),
+        })
+        if len(applications) >= limit:
+            break
+    suffix = f" matching {query!r}" if query else ""
+    return {
+        "result": f"Found {len(applications)} installed application(s){suffix}.",
+        "applications": applications,
+        "query": query or None,
+        "platform": platform.system(),
+        "catalogue_age_seconds": max(0, int(time.time() - float(_INDEX.get("built") or time.time()))),
+    }
+
+
 @register("openApplication")
 def open_application(args: Dict[str, Any]) -> Dict[str, Any]:
     name = str(args.get("name") or args.get("application") or "").strip()
@@ -429,7 +705,8 @@ def open_application(args: Dict[str, Any]) -> Dict[str, Any]:
     known = _resolve_known_app(name)
     if known:
         _launch_known(known)
-        return {"result": f"{known['label']} opened.", "application": known["label"], "method": "known_app"}
+        message = f"Launch requested for {known['label']}." if platform.system() == "Linux" else f"{known['label']} opened."
+        return {"result": message, "application": known["label"], "method": "known_app"}
     discovered = _discover_application(name)
     if not discovered and _INDEX["built"] and time.time() - _INDEX["built"] > 120:
         # Maybe installed since the index was built: rebuild once, then retry.
@@ -440,7 +717,7 @@ def open_application(args: Dict[str, Any]) -> Dict[str, Any]:
     if discovered:
         _launch_discovered(discovered)
         return {
-            "result": f"Opened installed application {discovered['label']}.",
+            "result": f"Launch requested for installed application {discovered['label']}." if platform.system() == "Linux" else f"Opened installed application {discovered['label']}.",
             "application": discovered["label"], "method": discovered["method"],
         }
     _launch_via_windows_search(name)
@@ -460,9 +737,11 @@ def close_application(args: Dict[str, Any]) -> Dict[str, Any]:
     if matches:
         closed = _close_windows_with_keyboard(matches)
         if closed:
+            linux = platform.system() == "Linux"
             return {
-                "result": f"Closed {closed} visible '{name}' window(s) with Alt+F4.",
-                "application": name, "windows_closed": closed, "method": "keyboard_alt_f4",
+                "result": f"Closed {closed} visible '{name}' window(s) through the window manager." if linux else f"Closed {closed} visible '{name}' window(s) with Alt+F4.",
+                "application": name, "windows_closed": closed,
+                "method": "wmctrl_close" if linux else "keyboard_alt_f4",
             }
     if force:
         try:
@@ -490,7 +769,7 @@ def close_application(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 __all__ = [
-    "warm_app_index",
-    "open_application", "close_application", "APP_COMMANDS", "_candidate_score",
-    "_discover_application", "_matching_windows",
+    "warm_app_index", "list_applications",
+    "open_application", "close_application", "APP_COMMANDS", "LINUX_APP_COMMANDS", "_candidate_score",
+    "_discover_application", "_matching_windows", "_linux_desktop_candidates",
 ]

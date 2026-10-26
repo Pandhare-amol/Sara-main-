@@ -1,0 +1,10 @@
+PRETTY_NAME="Sara OS 1"
+NAME="Sara OS"
+VERSION_ID="1"
+VERSION="1 (Debian Bookworm)"
+VERSION_CODENAME=bookworm
+ID=saraos
+ID_LIKE=debian
+HOME_URL="https://github.com/Pandhare-amol/Sara-main-"
+SUPPORT_URL="https://github.com/Pandhare-amol/Sara-main-/issues"
+BUG_REPORT_URL="https://github.com/Pandhare-amol/Sara-main-/issues"

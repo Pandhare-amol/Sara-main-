@@ -35,6 +35,9 @@ import { UserPresenceEngine } from "../presence/userPresence";
 import { AppSettingsStore, type AppSettings } from "../settings/appSettings";
 import { appEvents, type AppEvent } from "../shared/appEvents";
 import { createLogger, logHub } from "../shared/logger";
+import { IntelligenceService } from "../intelligence/service";
+import { KnowledgeService } from "../knowledge/service";
+import { ReportService } from "../reporting/service";
 import { CharacterLibrary } from "./characterLibrary";
 import { PoseStore } from "./poseStore";
 
@@ -72,6 +75,9 @@ export class MyraaRuntime {
   readonly settings: AppSettingsStore;
   readonly registry: ModelRegistry;
   readonly router: ModelRouter;
+  readonly intelligence: IntelligenceService;
+  readonly knowledgeIndex: KnowledgeService;
+  readonly reports: ReportService;
   readonly permissions: PermissionEngine;
   readonly confirmations = new ConfirmationBroker();
   readonly tasks: TaskStore;
@@ -104,6 +110,9 @@ export class MyraaRuntime {
     this.currentSettings = this.settings.get();
     this.registry = new ModelRegistry(dataDir, options.getSecret);
     this.router = new ModelRouter(this.registry);
+    this.intelligence = new IntelligenceService(this.router, dataDir);
+    this.knowledgeIndex = new KnowledgeService(dataDir, this.router);
+    this.reports = new ReportService({ dataDir });
     this.permissions = new PermissionEngine(dataDir);
     this.tasks = new TaskStore({ dataDir });
     this.perception = new PerceptionEngine(options.callAgent, this.router);
@@ -127,6 +136,32 @@ export class MyraaRuntime {
       audit: this.audit,
       remember: (fact, kind) => options.remember(fact, kind === "preference" ? "preference" : "semantic", 0.7),
       notify: (title, body) => this.notify(title, body),
+      createWordReport: (request, signal) => this.reports.createWord(request, { signal }),
+      contentCapabilities: () => {
+        const catalogue = this.registry.publicCatalogue();
+        const providers = catalogue.providers
+          .filter((provider) => provider.enabled && provider.configured)
+          .map((provider) => ({ id: provider.id, name: provider.displayName, apiType: provider.apiType, locality: provider.locality }));
+        return {
+          gateway: "existing provider-neutral ModelRouter",
+          textAndCode: {
+            configured: providers.length > 0,
+            providers,
+            note: "Used by planning/content drafting; provider availability is still verified per request.",
+          },
+          imageOutput: {
+            configured: false,
+            reason: "The current provider contract supports text output and image input/vision, but has no authorized image-output modality or image-generation adapter.",
+            setupNeeded: "Configure an authorized image-output adapter in the existing provider gateway before requesting PNG/JPEG generation. No placeholder image will be fabricated.",
+          },
+          codeTesting: {
+            sandboxed: false,
+            permissionedCommandRunner: true,
+            reason: "shell.run is timeout/output-bounded and approval-gated, but it is not an OS/container security sandbox.",
+            setupNeeded: "Configure an isolated disposable container or Windows Sandbox runner before claiming untrusted generated code was sandbox-tested.",
+          },
+        };
+      },
       conflictWaitMs: this.currentSettings.autonomy.conflictWaitSec * 1000,
     });
     this.manager = new TaskManager({
@@ -142,7 +177,16 @@ export class MyraaRuntime {
       contacts: this.contacts,
       working: this.working,
       audit: this.audit,
-      recall: (query) => options.recall(query, 6),
+      recall: async (query) => {
+        const memories = await options.recall(query, 6);
+        // Only source grants that explicitly permit the selected model's
+        // locality are eligible. Retrieved passages are labeled untrusted in
+        // KnowledgeService so document text can never become instructions.
+        let locality: "local" | "cloud" = "cloud";
+        try { locality = this.router.candidates("planning")[0]?.locality || "cloud"; } catch { /* planner reports its own configuration error later */ }
+        const sources = await this.knowledgeIndex.modelContext(query, locality, 4).catch(() => []);
+        return [...sources, ...memories.slice(0, 2)];
+      },
       rememberEpisode: (text, importance) => options.remember(text, "episodic", importance),
       speak: (kind, line, facts, priority) => this.speakTaskEvent(kind, line, facts, priority),
       onEmergencyStop: (reason) => {
@@ -161,6 +205,9 @@ export class MyraaRuntime {
     this.currentSettings = await this.settings.initialize(this.options.legacySettings);
     await Promise.all([
       this.registry.initialize(),
+      this.intelligence.initialize(),
+      this.knowledgeIndex.initialize(),
+      this.reports.initialize(),
       this.permissions.initialize(),
       this.tasks.initialize(),
       this.downloads.initialize(),
@@ -479,6 +526,29 @@ export class MyraaRuntime {
     };
 
     app.use("/user-characters", express.static(this.characters.root, { fallthrough: true, index: false, dotfiles: "deny" }));
+    this.intelligence.registerRoutes(app);
+    this.knowledgeIndex.registerRoutes(app);
+
+    // Structured reports. Generation is queued as a normal task so OFFICE_WRITE
+    // confirmation, cancellation, audit, evidence and completion reporting are
+    // identical for API, text and voice requests.
+    app.get("/api/reports/templates", wrap(() => ({ templates: this.reports.templates() })));
+    app.get("/api/reports", wrap((req) => ({ reports: this.reports.list(Number(req.query.limit) || 100) })));
+    app.post("/api/reports/validate", wrap((req) => this.reports.validate(req.body || {})));
+    app.post("/api/reports/word", wrap((req) => {
+      const validation = this.reports.validate(req.body || {});
+      if (!validation.valid || !validation.normalized) {
+        const error = new Error(`Invalid report request: ${validation.errors.join(" ")}`) as Error & { status: number };
+        error.status = 422;
+        throw error;
+      }
+      const session = this.manager.runDirect(
+        `Create and verify Word report "${validation.normalized.title}" at ${validation.normalized.path}`,
+        { tool: "report.create_word", args: JSON.parse(JSON.stringify(validation.normalized)) as Record<string, unknown> },
+        "text",
+      );
+      return { task: publicTaskView(session), warnings: validation.warnings };
+    }));
 
     // models
     app.get("/api/models", wrap(() => ({
@@ -504,12 +574,13 @@ export class MyraaRuntime {
       await this.registry.saveUserModel(definition);
       return this.registry.publicCatalogue();
     }));
-    app.post("/api/providers/:id/key", wrap((req) => {
+    app.post("/api/providers/:id/key", wrap(async (req) => {
       const provider = this.registry.getProviderConfig(String(req.params.id));
       if (!provider?.secretName) throw new Error("Unknown provider or provider does not use a key.");
       const key = String(req.body?.apiKey || "").trim();
       if (!key) throw new Error("API key is required.");
       this.options.setSecret(provider.secretName, key);
+      if (!provider.enabled) await this.registry.setProviderEnabled(provider.id, true);
       return { ok: true, configured: true };
     }));
 
@@ -654,10 +725,10 @@ export class MyraaRuntime {
     }));
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     for (const timer of this.timers) clearInterval(timer);
     this.utilities.dispose();
-    void this.tasks.flush();
+    await Promise.all([this.tasks.flush(), this.intelligence.shutdown(), this.knowledgeIndex.shutdown()]);
   }
 }
 

@@ -332,6 +332,15 @@ const TaskCard: React.FC<{ task: TaskView; question?: { question: string; option
         </div>
       )}
 
+      {expanded && task.checkpoint && (task.checkpoint.nextSafeAction || task.checkpoint.uncertainActions.length > 0) && (
+        <details className="mt-3 rounded-lg border border-white/5 bg-black/20 p-2 text-[10px] text-slate-400">
+          <summary className="cursor-pointer font-mono uppercase tracking-wider text-slate-500">Recovery checkpoint</summary>
+          <p className="mt-1"><span className="text-slate-500">Next safe action:</span> {task.checkpoint.nextSafeAction}</p>
+          {task.checkpoint.uncertainActions.slice(-3).map((item) => <p key={`${item.at}-${item.tool}`} className="mt-1 text-amber-300/80">Uncertain — do not replay: {item.summary}</p>)}
+          {task.checkpoint.validation.slice(-2).map((item) => <p key={`${item.at}-${item.evidence}`} className={item.passed ? "mt-1 text-emerald-300/70" : "mt-1 text-rose-300/70"}>{item.passed ? "Verified" : "Not verified"}: {item.evidence}</p>)}
+        </details>
+      )}
+
       {pendingQuestion && !terminal && <QuestionBox task={task} question={pendingQuestion.question} options={pendingQuestion.options} />}
 
       {error && <p className="mt-2 text-[11px] text-rose-300">{error}</p>}

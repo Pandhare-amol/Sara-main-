@@ -341,17 +341,50 @@ export interface Goal {
   updatedAt: string;
 }
 
+export interface SkillStep {
+  id: string;
+  action: string;
+  tool?: string;
+  arguments?: Record<string, unknown>;
+}
+
+export interface SkillVerificationEvidence {
+  id: string;
+  kind: "automated_test" | "demonstration" | "manual_review" | "legacy_assertion";
+  passed: boolean;
+  summary: string;
+  reference?: string;
+  outputHash?: string;
+  verifier?: string;
+  createdAt: string;
+}
+
+export interface SkillVersion {
+  version: number;
+  description: string;
+  preconditions: string[];
+  steps: SkillStep[];
+  expectedOutcome: string;
+  requiredTools: string[];
+  requiredPermissions: string[];
+  dependencies: string[];
+  tests: string[];
+  provenanceUrls: string[];
+  limitations: string[];
+  rollbackInstructions: string[];
+  verificationEvidence: SkillVerificationEvidence[];
+  status: LearnedSkill["status"];
+  createdAt: string;
+  changeReason: string;
+  rolledBackFromVersion?: number;
+}
+
 export interface LearnedSkill {
   id: string;
   name: string;
   description: string;
   preconditions: string[];
-  steps: Array<{
-    id: string;
-    action: string;
-    tool?: string;
-    arguments?: Record<string, unknown>;
-  }>;
+  steps: SkillStep[];
   expectedOutcome: string;
   projectId: string | null;
   confidence: number;
@@ -359,7 +392,20 @@ export interface LearnedSkill {
   successes: number;
   failures: number;
   successRate: number;
+  /** Kept for backwards-compatible consumers; true only when status is verified. */
   verified: boolean;
+  status: "pending_review" | "verified" | "outdated" | "disabled" | "legacy_unreviewed";
+  version: number;
+  versions: SkillVersion[];
+  requiredTools: string[];
+  requiredPermissions: string[];
+  dependencies: string[];
+  tests: string[];
+  provenanceUrls: string[];
+  limitations: string[];
+  rollbackInstructions: string[];
+  verificationEvidence: SkillVerificationEvidence[];
+  revalidateAfter: string | null;
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string | null;

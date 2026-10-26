@@ -7,9 +7,11 @@
  * degrades to null/[] when not on Windows or if a binding fails to load.
  */
 import { createRequire } from "node:module";
+import path from "node:path";
 
-// Works both from tsx (ESM, development) and from the esbuild CJS bundle.
-const nodeRequire: NodeRequire = typeof require === "function" ? require : createRequire(import.meta.url);
+// Resolve optional native packages from the application root in both tsx ESM
+// development and the bundled CommonJS server.
+const nodeRequire: NodeRequire = createRequire(path.join(process.cwd(), "package.json"));
 
 export interface NativeRect {
   left: number;

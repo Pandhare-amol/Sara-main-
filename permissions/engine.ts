@@ -42,6 +42,7 @@ export const DEFAULT_POLICY: PermissionPolicy = {
     BROWSE_WEB: { decision: "allow" },
     CLIPBOARD: { decision: "allow" },
     NETWORK_API: { decision: "allow" },
+    OFFICE_WRITE: { decision: "ask" },
     PURCHASE: { decision: "ask" },
     ACCOUNT_CHANGE: { decision: "ask" },
     POWER_CONTROL: { decision: "ask" },

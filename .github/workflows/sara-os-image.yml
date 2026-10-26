@@ -1,0 +1,59 @@
+name: Build Sara OS image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-iso:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Validate OS profile
+        run: npm run os:validate
+
+      - name: Build bootable amd64 ISO
+        shell: bash
+        run: |
+          set +e
+          npm run os:build > sara-os-build.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "Sara OS build failed; final 250 log lines follow:"
+            tail -n 250 sara-os-build.log
+            details=$(tail -n 12 sara-os-build.log)
+            details=${details//'%'/'%25'}
+            details=${details//$'\r'/'%0D'}
+            details=${details//$'\n'/'%0A'}
+            echo "::error title=Sara OS image build log::$details"
+            exit "$status"
+          fi
+          tail -n 40 sara-os-build.log
+
+      - name: Verify exported ISO checksum
+        working-directory: out/sara-os
+        run: sha256sum --check SaraOS-*.iso.sha256
+
+      - name: Upload Sara OS ISO and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: SaraOS-${{ github.sha }}-amd64
+          path: |
+            out/sara-os/SaraOS-*.iso
+            out/sara-os/SaraOS-*.iso.sha256
+            out/sara-os/build-info.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readResponseBytes, safeFetch, type ExternalUrlLookup } from "../shared/netSafety";
 import { ApiAdapterRegistry } from "./adapterRegistry";
 import { executeVerifiedAdapter } from "./adapterExecutor";
 import { parsePublicApisMarkdown, PUBLIC_APIS_CATALOGUE_URL } from "./catalogueImporter";
@@ -10,6 +11,7 @@ export interface ApiHubOptions {
   dataDir: string;
   sourceUrl?: string;
   fetcher?: typeof fetch;
+  lookup?: ExternalUrlLookup;
   maximumAgeMs?: number;
   minimumProviderCount?: number;
   healthTimeoutMs?: number;
@@ -59,6 +61,7 @@ export class ApiHubService {
     const result = await checkProviderDocumentation(provider, {
       timeoutMs: this.options.healthTimeoutMs,
       fetcher: this.fetcher,
+      lookup: this.options.lookup,
     });
     return this.registry.recordHealth(id, { ...result });
   }
@@ -66,7 +69,7 @@ export class ApiHubService {
   async callAdapter(id: string, args: Record<string, unknown>, signal?: AbortSignal) {
     const adapter = this.adapters.get(id);
     if (!adapter) throw new Error(`Unknown API adapter: ${id}`);
-    return executeVerifiedAdapter(adapter, args, { fetcher: this.fetcher, signal });
+    return executeVerifiedAdapter(adapter, args, { fetcher: this.fetcher, lookup: this.options.lookup, signal });
   }
 
   status() {
@@ -87,10 +90,21 @@ export class ApiHubService {
       const headers: Record<string, string> = { "user-agent": "MYRAA-ApiHub/1.0" };
       if (metadata.sourceEtag) headers["if-none-match"] = metadata.sourceEtag;
       if (metadata.sourceLastModified) headers["if-modified-since"] = metadata.sourceLastModified;
-      const response = await this.fetcher(this.sourceUrl, { signal: controller.signal, headers, redirect: "follow" });
+      const response = await safeFetch(this.sourceUrl, {
+        signal: controller.signal,
+        headers,
+        maxRedirects: 3,
+        fetcher: this.fetcher,
+        lookup: this.options.lookup,
+      });
       if (response.status === 304) return this.registry.summary();
       if (!response.ok) throw new Error(`Public API catalogue returned HTTP ${response.status}.`);
-      const markdown = await response.text();
+      const bytes = await readResponseBytes(
+        response,
+        8 * 1024 * 1024,
+        "Public API catalogue exceeds the 8 MB size limit.",
+      );
+      const markdown = new TextDecoder().decode(bytes);
       const parsed = parsePublicApisMarkdown(markdown, this.sourceUrl);
       const minimum = clamp(this.options.minimumProviderCount ?? 100, 1, 10_000);
       if (parsed.providers.length < minimum) {

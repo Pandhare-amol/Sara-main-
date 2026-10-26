@@ -23,6 +23,9 @@ export default defineConfig(() => {
           // Split the 3D stack out of the app bundle so the UI shell can
           // paint while the character engine is still being fetched.
           manualChunks: {
+            react: ['react', 'react-dom'],
+            motion: ['motion'],
+            icons: ['lucide-react'],
             three: ['three'],
             character: ['mmd-parser'],
           },

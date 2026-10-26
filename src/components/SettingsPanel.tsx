@@ -203,7 +203,7 @@ function GeminiKeyBox() {
 }
 
 function OtherProviderKeys({ catalogue }: { catalogue: ModelCatalogue }) {
-  const providers = catalogue.providers.filter((p) => p.enabled && p.locality !== "local" && p.id !== "gemini");
+  const providers = catalogue.providers.filter((p) => p.locality !== "local" && p.id !== "gemini");
   const [values, setValues] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<Record<string, string>>({});
   if (!providers.length) return null;
@@ -225,7 +225,7 @@ function OtherProviderKeys({ catalogue }: { catalogue: ModelCatalogue }) {
         <div key={p.id} className="flex items-center gap-2 px-4 py-3">
           <div className="w-32 shrink-0">
             <div className="text-xs text-slate-100">{p.displayName}</div>
-            <div className="text-[10px] text-slate-500">{status[p.id] || (p.configured ? "Key saved" : "No key")}</div>
+            <div className="text-[10px] text-slate-500">{status[p.id] || (p.configured ? "Key saved" : p.enabled ? "No key" : "Optional — saving a key enables it")}</div>
           </div>
           <input type="password" value={values[p.id] || ""} onChange={(e) => setValues((v) => ({ ...v, [p.id]: e.target.value }))} autoComplete="off" spellCheck={false}
             aria-label={`${p.displayName} API key`} placeholder={p.configured ? "Replace key" : "Paste key"}
@@ -463,7 +463,7 @@ export function SettingsPanel({ isOpen, onClose, settings, onChange, appSettings
                 {section === "general" && (
                   <div className="space-y-5">
                     <Group title="Startup & appearance">
-                      <ToggleRow label="Launch at Windows startup" description="Start Sara quietly when you log in." checked={settings.autoStart}
+                      <ToggleRow label="Launch at login" description="Start Sara quietly when you log in." checked={settings.autoStart}
                         onChange={(v) => {
                           onChange({ autoStart: v });
                           void fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoStart: v }) }).catch(() => {});

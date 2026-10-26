@@ -19,12 +19,14 @@ import {
   Pause,
   Square,
   RefreshCw,
+  BookOpenCheck,
   Settings as SettingsIcon,
   Send
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Memory, MemoryCategory } from "./lib/memoryTypes";
 import { MemoryDashboard } from "./components/MemoryDashboard";
+import { IntelligenceDashboard } from "./components/IntelligenceDashboard";
 import { SettingsPanel, type SettingsSection } from "./components/SettingsPanel";
 import { TaskHud } from "./components/TaskHud";
 import { ModelChip } from "./components/ModelSelector";
@@ -380,6 +382,7 @@ export default function App() {
   // Myraa recollections database core state
   const [memories, setMemories] = useState<Memory[]>([]);
   const [showMemoryDashboard, setShowMemoryDashboard] = useState<boolean>(false);
+  const [showIntelligenceDashboard, setShowIntelligenceDashboard] = useState<boolean>(false);
 
   // V2: Settings + wake word state
   const [settings, setSettings] = useState<MyraaSettings>(() => loadSettings());
@@ -700,6 +703,15 @@ export default function App() {
           >
             <Brain size={14} />
             <span className="hidden sm:inline">RECALLS</span>
+          </button>
+
+          <button
+            onClick={() => setShowIntelligenceDashboard(!showIntelligenceDashboard)}
+            className={`flex items-center gap-1 transition text-xs font-mono tracking-widest cursor-pointer ${showIntelligenceDashboard ? "text-cyan-400 opacity-100" : "opacity-25 hover:opacity-100 text-white"}`}
+            title="Evidence-grounded learning and research"
+          >
+            <BookOpenCheck size={14} />
+            <span className="hidden sm:inline">LEARN</span>
           </button>
 
           <button
@@ -1113,6 +1125,11 @@ export default function App() {
         onAddMemory={handleAddManualMemory}
         onDeleteMemory={handleDeleteMemory}
         themeColor={themeColor}
+      />
+
+      <IntelligenceDashboard
+        isOpen={showIntelligenceDashboard}
+        onClose={() => setShowIntelligenceDashboard(false)}
       />
 
       {/* What Sara is doing on the PC, plus approval requests (always shown). */}

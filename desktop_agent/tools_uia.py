@@ -15,12 +15,14 @@ pointers must not be used from arbitrary FastAPI worker threads.
 
 from __future__ import annotations
 
+import math
 import platform
 import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from .registry import ToolError, register
 
@@ -171,9 +173,12 @@ def _snapshot_worker(hwnd: int, max_elements: int, query: str, roles: List[str])
         U.UIA_IsEnabledPropertyId, U.UIA_HasKeyboardFocusPropertyId, U.UIA_IsKeyboardFocusablePropertyId,
         U.UIA_AutomationIdPropertyId, U.UIA_IsPasswordPropertyId, U.UIA_IsOffscreenPropertyId,
         U.UIA_IsInvokePatternAvailablePropertyId, U.UIA_IsValuePatternAvailablePropertyId,
+        U.UIA_IsRangeValuePatternAvailablePropertyId,
         U.UIA_IsTogglePatternAvailablePropertyId, U.UIA_IsExpandCollapsePatternAvailablePropertyId,
         U.UIA_IsSelectionItemPatternAvailablePropertyId, U.UIA_IsScrollItemPatternAvailablePropertyId,
         U.UIA_ValueValuePropertyId, U.UIA_ValueIsReadOnlyPropertyId,
+        U.UIA_RangeValueValuePropertyId, U.UIA_RangeValueMinimumPropertyId, U.UIA_RangeValueMaximumPropertyId,
+        U.UIA_LegacyIAccessibleValuePropertyId,
         U.UIA_ToggleToggleStatePropertyId, U.UIA_ExpandCollapseExpandCollapseStatePropertyId,
         U.UIA_SelectionItemIsSelectedPropertyId,
     ]
@@ -232,6 +237,7 @@ def _snapshot_worker(hwnd: int, max_elements: int, query: str, roles: List[str])
         patterns = []
         for label, prop in (
             ("invoke", "CachedIsInvokePatternAvailable"), ("value", "CachedIsValuePatternAvailable"),
+            ("range_value", "CachedIsRangeValuePatternAvailable"),
             ("toggle", "CachedIsTogglePatternAvailable"), ("expand", "CachedIsExpandCollapsePatternAvailable"),
             ("select", "CachedIsSelectionItemPatternAvailable"), ("scroll_into_view", "CachedIsScrollItemPatternAvailable"),
         ):
@@ -248,6 +254,18 @@ def _snapshot_worker(hwnd: int, max_elements: int, query: str, roles: List[str])
         automation_id = _safe(lambda: element.CachedAutomationId)
         if automation_id and len(str(automation_id)) <= 60:
             record["automation_id"] = str(automation_id)
+        if role == "link":
+            # Chrome/Edge expose a link's target through LegacyIAccessible.
+            # Surface only playable YouTube targets; never return arbitrary
+            # link URLs that could contain account/session information.
+            target = _safe(lambda: element.GetCachedPropertyValue(U.UIA_LegacyIAccessibleValuePropertyId))
+            if isinstance(target, str) and len(target) <= 2_000:
+                parsed = urlparse(target)
+                host = (parsed.hostname or "").casefold().rstrip(".")
+                youtube = host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+                playable = parsed.path in {"/watch", "/playlist", "/live"} or parsed.path.startswith("/shorts/")
+                if youtube and playable:
+                    record["target_url"] = target
         if patterns:
             record["actions"] = patterns
         if "value" in patterns:
@@ -258,6 +276,16 @@ def _snapshot_worker(hwnd: int, max_elements: int, query: str, roles: List[str])
                 value = _safe(lambda: element.GetCachedPropertyValue(U.UIA_ValueValuePropertyId))
                 if isinstance(value, str) and value:
                     record["value"] = value[:200]
+        if "range_value" in patterns:
+            range_value = _safe(lambda: element.GetCachedPropertyValue(U.UIA_RangeValueValuePropertyId))
+            range_minimum = _safe(lambda: element.GetCachedPropertyValue(U.UIA_RangeValueMinimumPropertyId))
+            range_maximum = _safe(lambda: element.GetCachedPropertyValue(U.UIA_RangeValueMaximumPropertyId))
+            if isinstance(range_value, (int, float)):
+                record["value"] = float(range_value)
+            if isinstance(range_minimum, (int, float)):
+                record["minimum"] = float(range_minimum)
+            if isinstance(range_maximum, (int, float)):
+                record["maximum"] = float(range_maximum)
         if "toggle" in patterns:
             state = _safe(lambda: element.GetCachedPropertyValue(U.UIA_ToggleToggleStatePropertyId))
             if state is not None:
@@ -414,6 +442,24 @@ def _action_worker(element_id: str, snapshot_id: Optional[str], action: str, val
     elif action == "focus":
         element.SetFocus()
         result["method"] = "uia.focus"
+    elif action == "set_range_value":
+        if value is None:
+            raise ToolError("set_range_value requires a numeric value.")
+        try:
+            requested = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ToolError("set_range_value requires a numeric value.") from exc
+        pattern = _require(_pattern(element, U.UIA_RangeValuePatternId, U.IUIAutomationRangeValuePattern), "range value")
+        minimum, maximum = float(pattern.CurrentMinimum), float(pattern.CurrentMaximum)
+        if requested < minimum or requested > maximum:
+            raise ToolError(f"Range value must be between {minimum:g} and {maximum:g}.")
+        pattern.SetValue(requested)
+        current = float(pattern.CurrentValue)
+        result["verified_value"] = math.isclose(current, requested, rel_tol=0, abs_tol=0.01)
+        result["value"] = current
+        result["minimum"] = minimum
+        result["maximum"] = maximum
+        result["method"] = "uia.set_range_value"
     elif action == "set_value":
         if value is None:
             raise ToolError("set_value requires a value.")

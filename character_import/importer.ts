@@ -28,7 +28,7 @@ import { ZipArchive } from "./zip";
 // @ts-ignore - plain ESM helper shared with the CLI staging script.
 import { decodeTga, encodePng } from "../tools/tga2png.mjs";
 
-const nodeRequire = createRequire(import.meta.url ?? __filename);
+const nodeRequire = createRequire(path.join(process.cwd(), "package.json"));
 
 export interface ImportOptions {
   /** .zip, .pmx or a folder. */

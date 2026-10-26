@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { CognitiveRuntime } from "../runtime";
+import { loadCognitionConfig } from "../config";
 import { SocialInitiativeEngine } from "../socialInitiativeEngine";
 import { SpeechOrchestrator } from "../speechOrchestrator";
 import { SituationModel } from "../situationModel";
@@ -81,6 +82,21 @@ function usefulThought(origin: ThoughtCandidate["origin"] = "unfinished_thread")
     expiresAt: Date.now() + 180_000,
   };
 }
+
+test("disabled cognition does not start the autonomous mind", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "myraa-disabled-cognition-test-"));
+  const runtime = new CognitiveRuntime({
+    dataDir: dir,
+    config: loadCognitionConfig({ MYRAA_ENABLE_COGNITION: "false" } as NodeJS.ProcessEnv),
+  });
+  t.after(async () => {
+    await runtime.shutdown();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  await runtime.initialize();
+  assert.equal(runtime.status().enabled, false);
+  assert.equal(runtime.mind.status().running, false);
+});
 
 test("required #1: idle startup keeps lightweight cognition alive without continuous model calls", async (t) => {
   let deepCalls = 0;

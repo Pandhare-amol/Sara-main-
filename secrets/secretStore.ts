@@ -1,9 +1,9 @@
 /**
  * OS-protected secret storage.
  *
- * Windows: values are encrypted with DPAPI (ProtectedData, CurrentUser scope)
- * so the stored file is useless to other accounts and other machines. The
- * secret travels to PowerShell over stdin, never on a command line.
+ * Windows: values are encrypted with DPAPI (ProtectedData, CurrentUser scope).
+ * Sara OS/Linux: when MYRAA_SECRET_BACKEND=libsecret, values are stored by the
+ * desktop Secret Service (gnome-keyring) and only metadata is written here.
  * Other platforms: owner-only (0600) file, documented as weaker.
  *
  * Decrypted values are cached in this backend process only. They are never
@@ -13,8 +13,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
+export type SecretProtection = "dpapi" | "libsecret" | "plain-0600";
+
 interface StoredSecret {
-  protection: "dpapi" | "plain-0600";
+  protection: SecretProtection;
   data: string;
   updatedAt: string;
 }
@@ -22,6 +24,21 @@ interface StoredSecret {
 interface SecretFile {
   version: 2;
   entries: Record<string, StoredSecret>;
+}
+
+export interface SecretCommandResult {
+  status: number | null;
+  stdout?: string;
+  stderr?: string;
+  error?: Error;
+}
+
+export type SecretCommandRunner = (command: string, args: string[], input: string) => SecretCommandResult;
+
+export interface SecretStoreOptions {
+  /** Explicit backend for tests/OS packaging. Windows always retains DPAPI. */
+  backend?: "auto" | "libsecret" | "plain-0600";
+  commandRunner?: SecretCommandRunner;
 }
 
 const PS_ENCRYPT = [
@@ -42,30 +59,49 @@ const PS_DECRYPT = [
   "[Console]::Out.Write([Convert]::ToBase64String($plain))",
 ].join(";");
 
-function runPowerShell(script: string, input: string): string {
-  const result = spawnSync(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-    { input, encoding: "utf8", windowsHide: true, timeout: 15_000 },
-  );
-  if (result.status !== 0) {
-    throw new Error(`DPAPI operation failed: ${(result.stderr || "").trim().split("\n")[0] || `exit ${result.status}`}`);
-  }
-  return String(result.stdout || "").trim();
+const defaultCommandRunner: SecretCommandRunner = (command, args, input) => {
+  const result = spawnSync(command, args, {
+    input,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 15_000,
+  });
+  return {
+    status: result.status,
+    stdout: String(result.stdout || ""),
+    stderr: String(result.stderr || ""),
+    error: result.error,
+  };
+};
+
+function commandFailure(label: string, result: SecretCommandResult): Error {
+  const detail = result.error?.message
+    || String(result.stderr || "").trim().split("\n")[0]
+    || `exit ${result.status ?? "unknown"}`;
+  return new Error(`${label} failed: ${detail}`);
 }
 
 export class SecretStore {
   private readonly file: string;
   private readonly cache = new Map<string, string>();
+  private readonly commandRunner: SecretCommandRunner;
   private loaded = false;
   private store: SecretFile = { version: 2, entries: {} };
 
-  constructor(private readonly dataDir: string, private readonly platform = process.platform) {
+  constructor(
+    private readonly dataDir: string,
+    private readonly platform = process.platform,
+    private readonly options: SecretStoreOptions = {},
+  ) {
     this.file = path.join(dataDir, "secrets.v2.json");
+    this.commandRunner = options.commandRunner || defaultCommandRunner;
   }
 
-  get protection(): StoredSecret["protection"] {
-    return this.platform === "win32" ? "dpapi" : "plain-0600";
+  get protection(): SecretProtection {
+    if (this.platform === "win32") return "dpapi";
+    const configured = this.options.backend || process.env.MYRAA_SECRET_BACKEND || "auto";
+    if (this.platform === "linux" && configured === "libsecret") return "libsecret";
+    return "plain-0600";
   }
 
   private load(): void {
@@ -92,13 +128,31 @@ export class SecretStore {
     const entry = this.store.entries[name];
     if (!entry) return undefined;
     try {
-      const value = entry.protection === "dpapi"
-        ? Buffer.from(runPowerShell(PS_DECRYPT, entry.data), "base64").toString("utf8")
-        : Buffer.from(entry.data, "base64").toString("utf8");
+      let value: string;
+      if (entry.protection === "dpapi") {
+        const result = this.commandRunner(
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", PS_DECRYPT],
+          entry.data,
+        );
+        if (result.status !== 0) throw commandFailure("DPAPI operation", result);
+        value = Buffer.from(String(result.stdout || "").trim(), "base64").toString("utf8");
+      } else if (entry.protection === "libsecret") {
+        const result = this.commandRunner(
+          "secret-tool",
+          ["lookup", "application", "sara", "name", name],
+          "",
+        );
+        if (result.status !== 0) throw commandFailure("Secret Service lookup", result);
+        value = String(result.stdout || "").replace(/[\r\n]+$/, "");
+        if (!value) return undefined;
+      } else {
+        value = Buffer.from(entry.data, "base64").toString("utf8");
+      }
       this.cache.set(name, value);
       return value;
     } catch {
-      // Unreadable (e.g. copied from another Windows account): treat as absent.
+      // Unreadable (copied DPAPI data, locked/missing keyring): treat as absent.
       return undefined;
     }
   }
@@ -107,16 +161,43 @@ export class SecretStore {
     this.load();
     const trimmed = value.trim();
     if (!trimmed) throw new Error("Secret must not be empty.");
-    const data = this.protection === "dpapi"
-      ? runPowerShell(PS_ENCRYPT, trimmed)
-      : Buffer.from(trimmed, "utf8").toString("base64");
-    this.store.entries[name] = { protection: this.protection, data, updatedAt: new Date().toISOString() };
+    const protection = this.protection;
+    let data: string;
+    if (protection === "dpapi") {
+      const result = this.commandRunner(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", PS_ENCRYPT],
+        trimmed,
+      );
+      if (result.status !== 0) throw commandFailure("DPAPI operation", result);
+      data = String(result.stdout || "").trim();
+    } else if (protection === "libsecret") {
+      const result = this.commandRunner(
+        "secret-tool",
+        ["store", "--label=Sara provider credential", "application", "sara", "name", name],
+        trimmed,
+      );
+      if (result.status !== 0) throw commandFailure("Secret Service store", result);
+      data = "secret-service";
+    } else {
+      data = Buffer.from(trimmed, "utf8").toString("base64");
+    }
+    this.store.entries[name] = { protection, data, updatedAt: new Date().toISOString() };
     this.cache.set(name, trimmed);
     this.save();
   }
 
   delete(name: string): void {
     this.load();
+    const entry = this.store.entries[name];
+    if (entry?.protection === "libsecret") {
+      const result = this.commandRunner(
+        "secret-tool",
+        ["clear", "application", "sara", "name", name],
+        "",
+      );
+      if (result.status !== 0) throw commandFailure("Secret Service clear", result);
+    }
     delete this.store.entries[name];
     this.cache.delete(name);
     this.save();

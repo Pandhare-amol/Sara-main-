@@ -17,7 +17,7 @@ import type { ResourceName } from "../scheduler";
 
 export type ActionGroup =
   | "core" | "vision" | "mouse" | "window" | "app" | "files" | "clipboard"
-  | "browser" | "web" | "download" | "shell" | "system" | "memory" | "task" | "messaging";
+  | "browser" | "youtube" | "web" | "download" | "shell" | "system" | "memory" | "task" | "messaging" | "artifact" | "office";
 
 export interface ActionDefinition {
   name: string;
@@ -77,8 +77,9 @@ export const ACTIONS: ActionDefinition[] = [
   { name: "window.focus", group: "window", description: "Bring a window to the front (restores it if minimized).", args: obj({ title: str("Window title (partial)") }, ["title"]), capability: "CONTROL_INPUT", resources: () => ["focus"], progress: (a) => `Switching to ${short(a.title, 24)}…`, batchable: true, changesUi: true },
   { name: "window.set", group: "window", description: "Move/resize/minimize/maximize/restore/close a window.", args: obj({ title: str("Window title (partial)"), action: str("Action", { enum: ["move", "resize", "move_resize", "minimize", "maximize", "restore", "close"] }), x: num("Left"), y: num("Top"), width: num("Width", 120), height: num("Height", 80) }, ["title", "action"]), capability: "CONTROL_INPUT", resources: () => ["focus"], progress: (a) => `${short(a.action, 12)} window…`, batchable: true, changesUi: true },
   { name: "window.list", group: "window", description: "List open windows.", args: obj({}), capability: "SCREEN_CAPTURE", resources: none, progress: () => "Checking open windows…", batchable: false, changesUi: false },
-  { name: "app.launch", group: "app", description: "Launch an installed application by name (any app; MYRAA discovers it).", args: obj({ name: str("Application name") }, ["name"]), capability: "LAUNCH_APP", resources: () => ["focus"], progress: (a) => `Opening ${short(a.name, 24)}…`, batchable: true, changesUi: true },
-  { name: "app.close", group: "app", description: "Close an application gracefully.", args: obj({ name: str("Application name") }, ["name"]), capability: "LAUNCH_APP", resources: () => ["focus"], progress: (a) => `Closing ${short(a.name, 24)}…`, batchable: false, changesUi: true },
+  { name: "app.launch", group: "app", description: "Launch an installed application by name (any app; MYRAA discovers it from the operating system catalogue).", args: obj({ name: str("Application name") }, ["name"]), capability: "LAUNCH_APP", resources: () => ["focus"], progress: (a) => `Opening ${short(a.name, 24)}…`, batchable: true, changesUi: true },
+  { name: "app.close", group: "app", description: "Close an application gracefully through the platform window manager.", args: obj({ name: str("Application name") }, ["name"]), capability: "LAUNCH_APP", resources: () => ["focus"], progress: (a) => `Closing ${short(a.name, 24)}…`, batchable: false, changesUi: true },
+  { name: "app.list", group: "app", description: "List installed GUI applications from the operating system catalogue, optionally filtered by name or category.", args: obj({ query: str("Optional name or category filter"), limit: num("Maximum results", 1, 200), refresh: bool("Refresh the catalogue first") }), capability: "LAUNCH_APP", resources: none, progress: () => "Checking installed applications…", batchable: true, changesUi: false },
 
   // ---- files -------------------------------------------------------------------
   { name: "fs.known_folder", group: "files", description: "Real path of pictures/downloads/desktop/documents/videos/music/screenshots (handles OneDrive).", args: obj({ name: str("Folder name") }, ["name"]), capability: "READ_FILE", resources: none, progress: () => "Finding the folder…", batchable: true, changesUi: false },
@@ -96,10 +97,90 @@ export const ACTIONS: ActionDefinition[] = [
   { name: "fs.select", group: "files", description: "Open a folder in File Explorer and select files in it (extension like zip, a name glob, or exact names). Use for any 'select these files' step; it changes nothing on disk.", args: obj({ folder: str("Folder path or alias"), extension: str("Extension without dot"), pattern: str("Glob, e.g. *.zip"), names: { type: "array", items: { type: "string" }, maxItems: 200 } }, ["folder"]), capability: "LAUNCH_APP", resources: () => ["focus"], progress: (a) => `Selecting files in ${fileName(a.folder)}…`, batchable: true, changesUi: true },
   { name: "fs.reveal", group: "files", description: "Show a file selected in File Explorer.", args: obj({ path: str("Path") }, ["path"]), capability: "LAUNCH_APP", resources: () => ["focus"], progress: (a) => `Showing ${fileName(a.path)}…`, batchable: true, changesUi: true },
 
+  // ---- content creation capability routing ---------------------------------------
+  { name: "artifact.capabilities", group: "artifact", description: "Read the actual configured content-creation mechanisms before planning image, Office or multi-artifact work. Reports configured text/coding providers, sandboxed-code-test status, cross-platform verified DOCX support, installed Word/Excel/PowerPoint COM availability, PDF export availability, and the explicit absence/presence of an authorized image-output adapter. Never fabricate an unsupported binary artifact or call a bounded host command a sandbox.", args: obj({}), capability: "READ_FILE", resources: none, progress: () => "Checking real creation capabilities…", batchable: true, changesUi: false },
+
+  // ---- Microsoft Office -----------------------------------------------------------
+  { name: "report.create_word", group: "office", description: "Create a new professional .docx report without installed Word. sections use {id,heading,level?,paragraphs?:[{text,kind,evidenceIds?}],bullets?:[{text,kind,evidenceIds?,level?}],tables?:[{title,headers,rows,note?,evidenceIds?}]}; sources use {id,title,kind,location?}. Uses versioned templates and deterministic Open XML QA. Supply only authorized evidence; never invent facts, figures, quotations or citations; never overwrites; always asks.", args: obj({
+    path: str("New absolute local .docx path"),
+    title: str("Report title", { minLength: 1, maxLength: 500 }),
+    purpose: str("Decision or outcome the report supports", { minLength: 1, maxLength: 2000 }),
+    audience: str("Intended reader or decision-maker", { minLength: 1, maxLength: 500 }),
+    templateId: str("Versioned template", { enum: ["generic-professional", "business-proposal", "project-status", "technical-design", "research-brief", "sales-performance", "finance-review", "hr-people", "education-assessment", "manufacturing-operations", "support-service", "risk-compliance"] }),
+    scope: str("Included and excluded scope", { maxLength: 2000 }),
+    reportingPeriod: str("Period covered", { maxLength: 200 }),
+    documentDate: str("YYYY-MM-DD"),
+    author: str("Document author", { maxLength: 200 }),
+    version: str("Document version", { maxLength: 40 }),
+    language: str("BCP-47 language tag", { maxLength: 35 }),
+    confidentiality: str("Classification", { enum: ["public", "internal", "confidential", "restricted"] }),
+    sections: { type: "array", maxItems: 60, items: obj({
+      id: str("Stable section ID", { minLength: 1, maxLength: 80 }),
+      heading: str("Section heading", { minLength: 1, maxLength: 300 }),
+      level: num("Heading level", 1, 3),
+      paragraphs: { type: "array", maxItems: 500, items: obj({
+        text: str("Exact paragraph text; no placeholders", { minLength: 1, maxLength: 10000 }),
+        kind: str("Evidence status", { enum: ["fact", "analysis", "estimate", "assumption", "recommendation", "conclusion"] }),
+        evidenceIds: { type: "array", maxItems: 50, items: { type: "string", maxLength: 80 } },
+      }, ["text", "kind"]) },
+      bullets: { type: "array", maxItems: 500, items: obj({
+        text: str("Exact bullet text; no placeholders", { minLength: 1, maxLength: 10000 }),
+        kind: str("Evidence status", { enum: ["fact", "analysis", "estimate", "assumption", "recommendation", "conclusion"] }),
+        evidenceIds: { type: "array", maxItems: 50, items: { type: "string", maxLength: 80 } },
+        level: num("Bullet level", 0, 2),
+      }, ["text", "kind"]) },
+      tables: { type: "array", maxItems: 50, items: obj({
+        title: str("Table title", { minLength: 1, maxLength: 300 }),
+        headers: { type: "array", maxItems: 30, items: { type: "string", maxLength: 2000 } },
+        rows: { type: "array", maxItems: 2000, items: { type: "array", maxItems: 30, items: { type: "string", maxLength: 2000 } } },
+        note: str("Table note", { maxLength: 1000 }),
+        evidenceIds: { type: "array", maxItems: 50, items: { type: "string", maxLength: 80 } },
+      }, ["title", "headers", "rows"]) },
+    }, ["id", "heading"]) },
+    sources: { type: "array", maxItems: 200, items: obj({
+      id: str("Stable source ID used by evidenceIds", { minLength: 1, maxLength: 80 }),
+      title: str("Source title", { minLength: 1, maxLength: 500 }),
+      kind: str("Source kind", { enum: ["file", "web", "dataset", "interview", "user-provided", "system-record", "other"] }),
+      location: str("Authorized file path or HTTP(S) URL", { maxLength: 2000 }),
+      author: str("Source author", { maxLength: 300 }),
+      publisher: str("Publisher", { maxLength: 300 }),
+      publishedAt: str("Published date as supplied", { maxLength: 80 }),
+      accessedAt: str("Access date as supplied", { maxLength: 80 }),
+      note: str("Relevance or source limitation; no invented quotation", { maxLength: 1000 }),
+    }, ["id", "title", "kind"]) },
+    assumptions: { type: "array", maxItems: 100, items: { type: "string", maxLength: 2000 } },
+    limitations: { type: "array", maxItems: 100, items: { type: "string", maxLength: 2000 } },
+    requiredSections: { type: "array", maxItems: 30, items: { type: "string", maxLength: 200 } },
+    calculations: { type: "array", maxItems: 100, items: obj({
+      id: str("Stable calculation ID", { minLength: 1, maxLength: 80 }),
+      label: str("Calculation label", { minLength: 1, maxLength: 300 }),
+      operation: str("Deterministic operation", { enum: ["sum", "average", "difference", "ratio", "percentage_change"] }),
+      inputs: { type: "array", maxItems: 100, items: obj({ name: str("Input label", { minLength: 1, maxLength: 200 }), value: num("Finite numeric value"), unit: str("Input unit", { maxLength: 50 }) }, ["name", "value"]) },
+      result: num("Expected result; rejected when recomputation differs"),
+      unit: str("Result unit", { maxLength: 50 }),
+      note: str("Method note", { maxLength: 1000 }),
+      evidenceIds: { type: "array", maxItems: 50, items: { type: "string", maxLength: 80 } },
+    }, ["id", "label", "operation", "inputs", "result"]) },
+  }, ["path", "title", "purpose", "audience", "sections"]), capability: "OFFICE_WRITE", resources: none, progress: (a) => `Building and checking ${fileName(a.path)}…`, batchable: false, changesUi: false },
+  { name: "office.status", group: "office", description: "Check whether desktop Microsoft Word, Excel and PowerPoint are installed. Does not launch them.", args: obj({}), capability: "READ_FILE", resources: none, progress: () => "Checking Microsoft Office…", batchable: true, changesUi: false },
+  { name: "office.create_word", group: "office", description: "Create a new .docx with Microsoft Word, save it to a new path, and verify the file. Never overwrites. Always asks for approval.", args: obj({ path: str("New absolute .docx path"), title: str("Optional document title", { maxLength: 500 }), content: str("Document body", { maxLength: 500000 }) }, ["path", "content"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Creating ${fileName(a.path)} in Word…`, batchable: false, changesUi: true },
+  { name: "office.create_workbook", group: "office", description: "Create and integrity-check a new .xlsx with installed Microsoft Excel. Ordinary rows are values (formula-like strings are escaped). Deterministic formulas are allowed only in explicit {cell,formula,number_format?} entries with local arithmetic/ranges and a safe function allowlist; computed values are returned. Optional charts use {type,column|bar|line|pie,title?,source_range,anchor_cell?}. Never overwrites; always asks.", args: obj({ path: str("New absolute .xlsx path"), sheet_name: str("Worksheet name", { maxLength: 31 }), rows: { type: "array", items: { type: "array", items: { type: ["string", "number", "boolean", "null"] }, maxItems: 200 }, maxItems: 10000 }, header: bool("Bold the first row"), formulas: { type: "array", maxItems: 2000, items: obj({ cell: str("Unique A1 cell address", { minLength: 2, maxLength: 10 }), formula: str("Safe local Excel formula beginning with =", { minLength: 2, maxLength: 1000 }), number_format: str("Optional Excel number format", { maxLength: 80 }) }, ["cell", "formula"]) }, charts: { type: "array", maxItems: 20, items: obj({ type: str("Chart type", { enum: ["column", "bar", "line", "pie"] }), title: str("Chart title", { maxLength: 300 }), source_range: str("Local A1 source range, e.g. A1:B6", { minLength: 5, maxLength: 30 }), anchor_cell: str("Top-left anchor cell", { minLength: 2, maxLength: 10 }) }, ["type", "source_range"]) } }, ["path", "rows"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Creating ${fileName(a.path)} in Excel…`, batchable: false, changesUi: true },
+  { name: "office.create_presentation", group: "office", description: "Create and integrity-check a readable, editable .pptx with installed Microsoft PowerPoint from title/bullet slides. A slide may embed one validated local PNG/JPEG/GIF/BMP using image_path; no image is generated or uploaded. Existing files are never overwritten; always asks.", args: obj({ path: str("New absolute .pptx path"), slides: { type: "array", items: obj({ title: str("Slide title", { maxLength: 500 }), bullets: { type: "array", items: { type: "string", maxLength: 2000 }, maxItems: 50 }, image_path: str("Optional authorized local image to embed", { maxLength: 2000 }) }, ["title"]), maxItems: 200 } }, ["path", "slides"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Creating ${fileName(a.path)} in PowerPoint…`, batchable: false, changesUi: true },
+  { name: "office.edit_word", group: "office", description: "Edit an existing .docx in Microsoft Word after approval. append adds exact text; replace_text replaces an exact approved number of case-sensitive matches. Creates and verifies a timestamped same-folder backup before saving, restores it on failure, and rejects read-only/oversized files.", args: obj({ path: str("Existing absolute .docx path"), operation: str("append or replace_text", { enum: ["append", "replace_text"] }), content: str("Exact text to append or use as the replacement", { minLength: 1, maxLength: 100000 }), find_text: str("Exact case-sensitive text to replace (required for replace_text)", { maxLength: 50000 }), expected_replacements: num("Exact approved match count (required for replace_text)", 1, 1000) }, ["path", "operation", "content"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Updating ${fileName(a.path)} in Word…`, batchable: false, changesUi: true },
+  { name: "office.edit_workbook", group: "office", description: "Update explicit cells in one existing .xlsx worksheet after approval. Optionally require each cell's current value before changing it. Formula-like strings are forced to plain text. Creates and verifies a timestamped backup before saving and restores it on failure.", args: obj({ path: str("Existing absolute .xlsx path"), sheet_name: str("Existing worksheet name", { minLength: 1, maxLength: 31 }), updates: { type: "array", maxItems: 1000, items: { type: "object", properties: { cell: str("One A1 cell address, not a range", { minLength: 2, maxLength: 10 }), value: { type: ["string", "number", "boolean", "null"], maxLength: 32767 }, expected_value: { type: ["string", "number", "boolean", "null"], maxLength: 32767, description: "Optional current value precondition; aborts the whole edit if it differs." } }, required: ["cell", "value"], additionalProperties: false } } }, ["path", "sheet_name", "updates"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Updating ${fileName(a.path)} in Excel…`, batchable: false, changesUi: true },
+  { name: "office.edit_presentation", group: "office", description: "Append one text slide or update one existing text slide in a .pptx after approval. Existing pictures/charts are not deleted. Creates and verifies a timestamped backup before saving and restores it on failure.", args: obj({ path: str("Existing absolute .pptx path"), operation: str("append_slide or update_slide", { enum: ["append_slide", "update_slide"] }), slide_number: num("1-based slide number required for update_slide", 1, 200), expected_title: str("Optional current title precondition for update_slide; aborts if it differs", { maxLength: 500 }), title: str("Slide title", { maxLength: 500 }), bullets: { type: "array", items: { type: "string", maxLength: 2000 }, maxItems: 50 } }, ["path", "operation", "title", "bullets"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Updating ${fileName(a.path)} in PowerPoint…`, batchable: false, changesUi: true },
+  { name: "office.export_pdf", group: "office", description: "Open an existing .docx/.xlsx/.pptx in Microsoft Office, export to a new .pdf path, and verify the file. Never overwrites. Always asks for approval.", args: obj({ path: str("Existing Office source path"), destination: str("New absolute .pdf path") }, ["path", "destination"]), capability: "OFFICE_WRITE", resources: () => ["focus"], progress: (a) => `Exporting ${fileName(a.path)} to PDF…`, batchable: false, changesUi: true },
+
   // ---- clipboard ----------------------------------------------------------------
   { name: "clipboard.copy_files", group: "clipboard", description: "Put files on the clipboard (like Ctrl+C in Explorer) so they can be pasted into chats, mail or upload fields with ctrl+v.", args: obj({ paths: { type: "array", items: { type: "string" }, maxItems: 20 } }, ["paths"]), capability: "CLIPBOARD", resources: () => ["clipboard"], progress: () => "Copying the file…", batchable: true, changesUi: false },
   { name: "clipboard.write_text", group: "clipboard", description: "Put text on the clipboard without pasting.", args: obj({ text: str("Text", { maxLength: 100000 }) }, ["text"]), capability: "CLIPBOARD", resources: () => ["clipboard"], progress: () => "Copying text…", batchable: true, changesUi: false },
   { name: "clipboard.read", group: "clipboard", description: "Read clipboard text (untrusted).", args: obj({}), capability: "CLIPBOARD", resources: () => ["clipboard"], progress: () => "Reading the clipboard…", batchable: true, changesUi: false },
+
+  // ---- verified YouTube player ----------------------------------------------------
+  { name: "youtube.play", group: "youtube", description: "Search/select an actual YouTube video or playlist in the user's real default browser and verify the watch URL plus playing state. Reuses only a verified YouTube tab; otherwise opens one new tab without replacing an unrelated tab. Supports 1-based result_index, channel, upload-date filter (latest), playlist selection and direct YouTube URLs. Never bypasses sign-in, age, region or missing-video restrictions.", args: obj({ query: str("Video/search query"), url: str("Optional youtube.com/youtu.be watch or playlist URL"), channel: str("Requested channel name to verify against browser media metadata"), result_index: num("1-based visible result", 1, 50), selection: str("video or playlist", { enum: ["video", "playlist"] }), latest: bool("Apply YouTube's upload-date search filter"), playlist: bool("Require verified playlist context"), start_playback: bool("Start and verify playback; default true") }), capability: "BROWSE_WEB", resources: () => ["browser", "keyboard", "clipboard", "focus"], progress: (a) => `Finding and playing ${short(a.query || a.url, 32)}…`, batchable: false, changesUi: true },
+  { name: "youtube.control", group: "youtube", description: "Control only the active verified YouTube player and return freshly synchronized state. Actions: play, pause, stop (pause + position zero), restart, next, previous, another, forward/backward, seek, seek_percent, middle, player volume/mute, fullscreen, captions and playback speed. Unsupported or unverified controls fail honestly; system volume is never substituted for player volume.", args: obj({ action: str("Player action", { enum: ["play", "pause", "stop", "restart", "next", "previous", "another", "forward", "backward", "seek", "seek_percent", "middle", "set_volume", "volume_up", "volume_down", "mute", "unmute", "toggle_mute", "fullscreen", "enter_fullscreen", "exit_fullscreen", "captions", "captions_on", "captions_off", "set_speed", "cancel"] }), seconds: num("Relative seek seconds", 0.1, 3600), position_seconds: num("Absolute playback position", 0), percent: num("Seek percentage", 0, 100), volume_percent: num("YouTube player volume", 0, 100), amount: num("Volume step percentage", 1, 100), rate: num("Playback speed", 0.25, 2) }, ["action"]), capability: "CONTROL_INPUT", resources: () => ["browser", "keyboard", "focus"], progress: (a) => `Controlling YouTube (${short(a.action, 18)})…`, batchable: false, changesUi: true },
+  { name: "youtube.state", group: "youtube", description: "Read fresh synchronized state from the active YouTube tab, accessibility controls and Windows media session: title, URL/video/playlist ID, playback state/position/duration, player volume/mute, fullscreen, captions, speed, search context, verified fields and real errors.", args: obj({}), capability: "SCREEN_CAPTURE", resources: () => ["browser"], progress: () => "Checking the YouTube player…", batchable: true, changesUi: false },
+  { name: "youtube.cancel", group: "youtube", description: "Cancel only a pending YouTube search/control operation. It does not stop unrelated tasks and does not alter current playback.", args: obj({}), capability: "READ_FILE", resources: none, progress: () => "Cancelling the YouTube operation…", batchable: false, changesUi: false },
 
   // ---- browser & web --------------------------------------------------------------
   { name: "browser.open", group: "browser", description: "Open a URL in the user's real default browser (reuses the active tab unless new_tab).", args: obj({ url: str("URL"), new_tab: bool("Open in a new tab") }, ["url"]), capability: "BROWSE_WEB", resources: () => ["browser", "focus"], progress: (a) => `Opening ${short(hostOf(a.url), 30)}…`, batchable: true, changesUi: true },
@@ -147,9 +228,13 @@ export function exposedGroups(goal: string, context: { process?: string | null; 
     groups.add("browser");
     groups.add("web");
   }
-  if (/(file|folder|photo|image|picture|pic|thumbnail|video|document|pdf|screenshot|download|explorer|copy|move|rename|delete|organi[sz]e|tasveer|foto)/.test(text) || /explorer/i.test(context.process || "")) {
+  if (/(youtube|\byt\b|video.{0,16}(play|pause|resume|stop|restart|next|previous|seek)|captions|playback speed|full.?screen)/.test(text)
+      || context.recentTools?.some((tool) => tool.startsWith("youtube."))) groups.add("youtube");
+  if (/(file|folder|photo|image|picture|pic|thumbnail|video|document|pdf|code|script|python|javascript|typescript|screenshot|download|explorer|copy|move|rename|delete|organi[sz]e|tasveer|foto)/.test(text) || /explorer/i.test(context.process || "")) {
     groups.add("files");
   }
+  if (/(create|make|generate|write|draft|build|edit|update|summari[sz]e).{0,40}(image|picture|text|report|document|docx|xlsx|spreadsheet|pptx|presentation|pdf|code|script|file)|multi.?artifact/.test(text)) groups.add("artifact");
+  if (/(microsoft office|\bword\b|docx|\breport\b|proposal|brief|working paper|status update|\bexcel\b|xlsx|spreadsheet|\bpowerpoint\b|pptx|presentation|\bpdf\b)/.test(text) || /winword|excel|powerpnt/i.test(context.process || "")) groups.add("office");
   if (/(download|installer|setup|\.exe|\.msi|\.zip)/.test(text)) groups.add("download");
   if (/(msg|message|send|bhej|text|chat|whatsapp|\bwp\b|\bwa\b|telegram|signal|messenger|reply|call|baat)/.test(text)) groups.add("messaging");
   if (/(send|bhej|attach|share|paste|copy|clipboard|whatsapp|telegram|mail)/.test(text)) groups.add("clipboard");

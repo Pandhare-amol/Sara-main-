@@ -11,7 +11,7 @@
  */
 
 export interface MyraaSettings {
-  /** Launch MYRAA (backends + browser tab) silently on Windows login. */
+  /** Launch Sara silently at the current user's Windows or Linux desktop login. */
   autoStart: boolean;
   /** Enable the always-listening wake-word detector. */
   wakeWordEnabled: boolean;
@@ -91,10 +91,14 @@ export function saveSettings(patch: Partial<MyraaSettings>): MyraaSettings {
 /** Push settings to the backend (server.ts persists to settings.json). */
 async function syncSettingsToBackend(settings: MyraaSettings): Promise<void> {
   try {
+    // Auto-start changes have an OS side effect and are posted explicitly by
+    // the two toggle controls. Do not replay the browser's default/stale value
+    // whenever an unrelated preference changes (Sara OS is enabled by default).
+    const { autoStart: _autoStart, ...ordinarySettings } = settings;
     await fetch("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings),
+      body: JSON.stringify(ordinarySettings),
     });
   } catch {
     /* Backend may be briefly unavailable during boot — non-fatal. */

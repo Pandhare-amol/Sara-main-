@@ -1,0 +1,88 @@
+# Base live/install system
+live-boot
+live-config
+live-config-systemd
+systemd-sysv
+linux-image-amd64
+firmware-linux-free
+sudo
+locales
+
+# Graphical desktop and login
+xorg
+xfce4
+xfce4-goodies
+lightdm
+lightdm-gtk-greeter
+thunar
+xfce4-terminal
+mousepad
+galculator
+xfce4-taskmanager
+xfce4-screenshooter
+zenity
+
+# Useful offline desktop applications (bounded, maintained Debian packages)
+libreoffice-writer
+libreoffice-calc
+libreoffice-impress
+libreoffice-gtk3
+hunspell-en-us
+vlc
+evince
+ristretto
+file-roller
+p7zip-full
+unrar-free
+geany
+simple-scan
+gnome-disk-utility
+pavucontrol
+blueman
+bluez
+
+# Sara's browser shell and desktop integration
+chromium
+xdg-utils
+libgtk-3-bin
+wmctrl
+xdotool
+xprintidle
+curl
+ca-certificates
+brightnessctl
+ffmpeg
+git
+rsync
+zip
+unzip
+htop
+jq
+tree
+lsof
+dnsutils
+
+# Network and audio
+network-manager
+network-manager-gnome
+pipewire
+pipewire-audio
+wireplumber
+pulseaudio-utils
+alsa-utils
+
+# Secure per-user secret storage
+libsecret-tools
+gnome-keyring
+
+# Local desktop-agent runtime and useful integrations
+python3
+python3-minimal
+tesseract-ocr
+scrot
+
+# Hybrid boot and installation helpers
+debian-installer-launcher
+grub-pc-bin
+grub-efi-amd64-bin
+shim-signed

@@ -174,7 +174,7 @@ export function Onboarding({ appSettings, onAppSettingsChange, settings, onChang
                   </div>
                   <Toggle label="Stand on my desktop" description="Shows me on your desktop or taskbar outside this window. You can drag me around." checked={appSettings.companion.enabled} onChange={(v) => onAppSettingsChange({ companion: { enabled: v } })} />
                   <Toggle label={`Wake word "${settings.wakePhrase}"`} description="Say it to wake me while this window is open." checked={settings.wakeWordEnabled} onChange={(v) => onChange({ wakeWordEnabled: v })} />
-                  <Toggle label="Start with Windows" description="Launch quietly when you log in." checked={settings.autoStart}
+                  <Toggle label="Start at login" description="Launch quietly when you log in." checked={settings.autoStart}
                     onChange={(v) => {
                       onChange({ autoStart: v });
                       void fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoStart: v }) }).catch(() => {});

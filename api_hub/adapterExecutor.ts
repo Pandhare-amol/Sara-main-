@@ -1,3 +1,4 @@
+import { readResponseBytes, safeFetch, type ExternalUrlLookup } from "../shared/netSafety";
 import { isSafePublicUrl } from "./healthChecker";
 import { validateAdapter } from "./adapterRegistry";
 import type {
@@ -11,6 +12,7 @@ export interface AdapterExecutionOptions {
   timeoutMs?: number;
   maximumResponseBytes?: number;
   env?: NodeJS.ProcessEnv;
+  lookup?: ExternalUrlLookup;
 }
 
 export async function executeVerifiedAdapter(
@@ -44,21 +46,22 @@ export async function executeVerifiedAdapter(
 
   const controller = new AbortController();
   const relayAbort = () => controller.abort("cancelled");
-  options.signal?.addEventListener("abort", relayAbort, { once: true });
+  if (options.signal?.aborted) relayAbort();
+  else options.signal?.addEventListener("abort", relayAbort, { once: true });
   const timeout = setTimeout(() => controller.abort("timeout"), clamp(options.timeoutMs ?? 15_000, 1_000, 60_000));
   timeout.unref?.();
   try {
-    const response = await fetchWithSafeRedirects(options.fetcher || fetch, url, {
+    const response = await safeFetch(url, {
       method: adapter.method,
       headers,
       body,
       signal: controller.signal,
+      maxRedirects: 3,
+      fetcher: options.fetcher,
+      lookup: options.lookup,
     });
     const maximum = clamp(options.maximumResponseBytes ?? 2_000_000, 1_024, 10_000_000);
-    const declared = Number(response.headers.get("content-length") || 0);
-    if (declared > maximum) throw new Error("API response exceeds the configured size limit.");
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > maximum) throw new Error("API response exceeds the configured size limit.");
+    const bytes = await readResponseBytes(response, maximum, "API response exceeds the configured size limit.");
     if (!response.ok) throw new Error(`API provider returned HTTP ${response.status}.`);
     let payload: unknown;
     try {
@@ -140,24 +143,6 @@ function renderPath(template: string, values: Record<string, unknown>): string {
   });
   if (/\{[a-zA-Z0-9_]+\}/.test(rendered)) throw new Error("Adapter URL contains unresolved parameters.");
   return rendered;
-}
-
-async function fetchWithSafeRedirects(
-  fetcher: typeof fetch,
-  initialUrl: string,
-  init: RequestInit,
-): Promise<Response> {
-  let current = initialUrl;
-  for (let redirects = 0; redirects <= 3; redirects += 1) {
-    const response = await fetcher(current, { ...init, redirect: "manual" });
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-    if (redirects === 3) throw new Error("API provider exceeded the redirect limit.");
-    const location = response.headers.get("location");
-    if (!location) throw new Error("API provider returned an invalid redirect.");
-    current = new URL(location, current).toString();
-    if (!isSafePublicUrl(current)) throw new Error("API provider redirected to an unsafe URL.");
-  }
-  throw new Error("API redirect failed.");
 }
 
 export function readRestrictedJsonPath(value: unknown, jsonPath: string): unknown {

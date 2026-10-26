@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+# live-build configuration for the x86_64 Sara OS live/install image.
+# Keep services loopback-only and let Debian Live create the ephemeral `sara`
+# account before the graphical session starts.
+lb config noauto \
+  --mode debian \
+  --distribution bookworm \
+  --architectures amd64 \
+  --binary-images iso-hybrid \
+  --archive-areas "main contrib non-free-firmware" \
+  --apt-recommends true \
+  --debian-installer live \
+  --debian-installer-gui true \
+  --bootappend-live "boot=live components username=sara hostname=sara-os locales=en_US.UTF-8 keyboard-layouts=us user-default-groups=audio,cdrom,dip,video,plugdev,netdev,scanner,bluetooth quiet splash" \
+  --iso-application "Sara OS" \
+  --iso-publisher "Sara OS Project" \
+  --iso-volume "SARA_OS" \
+  --memtest none \
+  "${@}"
