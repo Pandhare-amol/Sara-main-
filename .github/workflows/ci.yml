@@ -155,6 +155,11 @@ jobs:
           if [ "$status" -ne 0 ]; then
             echo "Sara OS build failed; final 250 log lines follow:"
             tail -n 250 sara-os-build.log
+            details=$(tail -n 80 sara-os-build.log)
+            details=${details//'%'/'%25'}
+            details=${details//$'\r'/'%0D'}
+            details=${details//$'\n'/'%0A'}
+            echo "::error title=Sara OS image build log::$details"
             exit "$status"
           fi
           tail -n 40 sara-os-build.log
