@@ -41,6 +41,7 @@ RUN apt-get update \
       live-build debootstrap xorriso squashfs-tools \
       isolinux syslinux-common syslinux-efi \
       grub-pc-bin grub-efi-amd64-bin mtools dosfstools \
+      cpio gzip bzip2 xz-utils zstd wget file uuid-runtime parted fdisk \
       ca-certificates curl rsync \
     && rm -rf /var/lib/apt/lists/*
 
