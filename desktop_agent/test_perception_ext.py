@@ -60,7 +60,7 @@ class FileExtTests(unittest.TestCase):
         ), patch.object(tools_files_ext.os, "access", return_value=False), patch("subprocess.Popen") as popen:
             result = tools_files_ext.open_path({"path": str(document)})
         self.assertEqual(result["method"], "xdg_open")
-        self.assertEqual(popen.call_args.args[0], ["/usr/bin/xdg-open", str(document)])
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/xdg-open", str(document.resolve())])
         self.assertNotIn("shell", popen.call_args.kwargs)
 
     def test_linux_executable_bit_also_requires_confirmation(self):
