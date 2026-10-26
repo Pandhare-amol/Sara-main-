@@ -66,8 +66,21 @@ The live session is ephemeral unless persistence is configured externally. An in
 - The ISO contains no credentials. `.env`, local data, personal characters, and licensed character assets are excluded from the container context.
 - A Secret Service failure is surfaced rather than silently downgrading Sara OS credentials to plaintext storage.
 
+## Verified image-build evidence
+
+On 2026-10-26, GitHub Actions [run 40280682661](https://github.com/Pandhare-amol/Sara-main-/actions/runs/40280682661) successfully:
+
+1. validated the OS profile and its security contracts;
+2. built the production application on both Linux and Windows CI;
+3. ran Debian `live-build` in the disposable builder;
+4. produced `SaraOS-1.5.2-amd64.iso`;
+5. verified its generated SHA-256 file; and
+6. uploaded artifact `SaraOS-069126a2c8ef59b019d5c1cd18d31466c038ed4a-amd64` (artifact ID `12632281987`, archive size 2,147,484,342 bytes, seven-day retention).
+
+This proves image production and checksum verification. It does **not** claim a manual VM or physical-hardware boot, installer walkthrough, microphone/GPU/Wi-Fi compatibility, or live Linux desktop-control acceptance.
+
 ## Validation limits
 
-`npm run os:validate` checks profile structure, boot/installer configuration, loopback binding assumptions, credential exclusions, Linux dependency separation, artifact checksums, and sandbox policy. Normal application tests and production builds still apply.
+`npm run os:validate` checks profile structure, boot/installer configuration, loopback binding assumptions, credential exclusions, Linux dependency separation, artifact checksums, privileged-builder separation, and browser sandbox policy. Normal application tests and production builds still apply.
 
 Producing and booting the final ISO requires Docker plus Debian package-network access. Automated profile/build tests are not equivalent to a manual boot test on every GPU, Wi-Fi adapter, microphone, firmware implementation, or VM platform.

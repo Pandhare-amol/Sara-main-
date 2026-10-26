@@ -130,11 +130,11 @@ jobs:
       - name: Build production application on Linux
         run: npm run build
 
-  # Build the full ISO only for Arena feature-branch pushes. Pull requests and
-  # main keep the fast profile checks above; release builds remain available
-  # through the manual Build Sara OS image workflow.
+  # Build the full ISO only for an explicitly marked Arena feature-branch push;
+  # it is a multi-gigabyte artifact. Pull requests/main keep the fast profile
+  # checks above, and release builds use the manual Build Sara OS image workflow.
   sara-os-image:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/') && contains(github.event.head_commit.message, '[build-os]')
     needs: sara-os-profile
     runs-on: ubuntu-latest
     timeout-minutes: 90
