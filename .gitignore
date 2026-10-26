@@ -19,6 +19,10 @@ agent_build/
 agent_dist/
 release/
 release-public/
+out/
+os/build/
+*.iso
+*.iso.sha256
 assets/.aistudio/
 assets/*.mp4
 .env*

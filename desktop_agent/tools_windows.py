@@ -1,8 +1,9 @@
 """
 Window management: minimize / maximize / close the active window or switch apps.
 
-Uses win32gui for the foreground window and pygetwindow for title-based lookups,
-with graceful degradation if a backend isn't present.
+Windows uses Win32 APIs. Sara OS/Linux uses semantic X11 window IDs through
+xdotool/wmctrl, which are installed in the image. Unsupported platforms fail
+cleanly instead of claiming a state change.
 """
 
 from __future__ import annotations
@@ -20,7 +21,20 @@ SW_RESTORE = 9
 SW_HIDE = 0
 
 
+def _run_linux(command: list[str], *, timeout: float = 3.0) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ToolError(f"Linux window control is unavailable: {error}") from error
+
+
 def _get_foreground_window():
+    if platform.system() == "Linux":
+        result = _run_linux(["xdotool", "getactivewindow"])
+        value = result.stdout.strip()
+        return value if result.returncode == 0 and value else None
     if platform.system() != "Windows":
         return None
     try:
@@ -35,6 +49,9 @@ def _get_foreground_window():
 
 
 def _window_title(hwnd) -> str:
+    if platform.system() == "Linux":
+        result = _run_linux(["xdotool", "getwindowname", str(hwnd)])
+        return result.stdout.strip() if result.returncode == 0 else ""
     try:
         import win32gui
 
@@ -44,26 +61,56 @@ def _window_title(hwnd) -> str:
 
 
 def _show_window(hwnd, cmd) -> None:
+    if platform.system() == "Linux":
+        window_id = str(hwnd)
+        if cmd == SW_MINIMIZE:
+            result = _run_linux(["xdotool", "windowminimize", window_id])
+        elif cmd == SW_MAXIMIZE:
+            result = _run_linux(["wmctrl", "-ir", window_id, "-b", "add,maximized_vert,maximized_horz"])
+        elif cmd == SW_RESTORE:
+            result = _run_linux(["wmctrl", "-ir", window_id, "-b", "remove,maximized_vert,maximized_horz"])
+            if result.returncode == 0:
+                result = _run_linux(["wmctrl", "-ia", window_id])
+        else:
+            raise ToolError(f"Window state command {cmd} is unsupported on Sara OS.")
+        if result.returncode != 0:
+            raise ToolError(result.stderr.strip() or "The window manager rejected the requested state change.")
+        return
     try:
         import win32gui
 
         win32gui.ShowWindow(hwnd, cmd)
-    except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Could not change window state: {e}")
+    except Exception as error:  # noqa: BLE001
+        raise ToolError(f"Could not change window state: {error}") from error
 
 
 def _close_window_hwnd(hwnd) -> None:
+    if platform.system() == "Linux":
+        result = _run_linux(["wmctrl", "-ic", str(hwnd)])
+        if result.returncode != 0:
+            raise ToolError(result.stderr.strip() or "The window manager refused to close that window.")
+        return
     try:
         import win32con
         import win32gui
 
         win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
-    except Exception as e:  # noqa: BLE001
-        raise ToolError(f"Could not close window: {e}")
+    except Exception as error:  # noqa: BLE001
+        raise ToolError(f"Could not close window: {error}") from error
 
 
 def _find_window_by_title(query: str):
-    """Return the hwnd of the first window whose title contains query."""
+    """Return the first visible window whose title contains query."""
+    if platform.system() == "Linux":
+        result = _run_linux(["wmctrl", "-l"])
+        if result.returncode != 0:
+            return None
+        needle = query.casefold()
+        for line in result.stdout.splitlines():
+            parts = line.split(None, 3)
+            if len(parts) == 4 and needle in parts[3].casefold():
+                return parts[0]
+        return None
     if platform.system() != "Windows":
         return None
     try:
@@ -85,22 +132,30 @@ def _find_window_by_title(query: str):
 
 
 def _focus(hwnd) -> None:
-    """Bring a window to the foreground and verify it.
+    """Bring a window to the foreground and verify it."""
+    if platform.system() == "Linux":
+        result = _run_linux(["wmctrl", "-ia", str(hwnd)])
+        if result.returncode != 0:
+            raise ToolError(result.stderr.strip() or "The window manager refused to focus that window.")
+        time.sleep(0.08)
+        active = _get_foreground_window()
+        # wmctrl emits a hex ID while xdotool normally emits decimal. Compare
+        # numerically when possible and otherwise retain a strict string check.
+        try:
+            matches = int(str(active), 0) == int(str(hwnd), 0)
+        except (TypeError, ValueError):
+            matches = str(active).casefold() == str(hwnd).casefold()
+        if not matches:
+            raise ToolError("Could not verify that the requested Linux window received focus.")
+        return
 
-    Windows only lets the foreground process hand focus to another window.
-    MYRAA's helper is a background process, so a lone SetForegroundWindow is
-    often ignored (the taskbar just flashes). A synthetic ALT tap marks this
-    process as having received input, which is the documented condition for
-    SetForegroundWindow to be honoured; we then verify the result.
-    """
     import ctypes
-
     import win32gui
 
     if win32gui.IsIconic(hwnd):
         _show_window(hwnd, SW_RESTORE)
         time.sleep(0.12)
-    for attempt in range(3):
+    for _attempt in range(3):
         try:
             win32gui.SetForegroundWindow(hwnd)
         except Exception:
@@ -126,7 +181,7 @@ def _focus(hwnd) -> None:
 
 
 def _resolve_target(args: Dict[str, Any]):
-    """Pick the hwnd to operate on: explicit title, or the foreground window."""
+    """Pick the window to operate on: explicit title, or foreground window."""
     title: Optional[str] = args.get("title") or args.get("application")
     if title:
         hwnd = _find_window_by_title(str(title))
@@ -172,14 +227,12 @@ def switch_application(args: Dict[str, Any]) -> Dict[str, Any]:
         _focus(hwnd)
         return {"result": f"Switched to: {str(title)}."}
 
-    # No specific title -> Alt+Tab cycle.
     try:
         import pyautogui
 
         pyautogui.hotkey("alt", "tab")
         return {"result": "Cycled to the next window."}
     except Exception:
-        # Fallback: cycle by enumerating windows and focusing the next one.
         if platform.system() == "Windows":
             try:
                 import win32gui
@@ -192,10 +245,10 @@ def switch_application(args: Dict[str, Any]) -> Dict[str, Any]:
                     return True
 
                 win32gui.EnumWindows(cb, None)
-                fg = win32gui.GetForegroundWindow()
+                foreground = win32gui.GetForegroundWindow()
                 if order:
-                    idx = order.index(fg) if fg in order else -1
-                    nxt = order[(idx + 1) % len(order)]
+                    index = order.index(foreground) if foreground in order else -1
+                    nxt = order[(index + 1) % len(order)]
                     _focus(nxt)
                     return {"result": f"Switched to: {win32gui.GetWindowText(nxt)}."}
             except Exception:

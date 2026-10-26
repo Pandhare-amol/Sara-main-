@@ -42,10 +42,29 @@ APP_COMMANDS: Dict[str, Dict[str, str]] = {
     "snipping tool": {"uwp": "ms-screenclip:", "image": "ScreenClippingHost.exe", "label": "Snipping Tool"},
 }
 
+# Sara OS ships these commands. Keeping a distinct map prevents Linux from
+# ever trying a same-named Windows executable or UWP URI.
+LINUX_APP_COMMANDS: Dict[str, Dict[str, str]] = {
+    "browser": {"exe": "chromium", "image": "chromium", "label": "Chromium"},
+    "chrome": {"exe": "chromium", "image": "chromium", "label": "Chromium"},
+    "chromium": {"exe": "chromium", "image": "chromium", "label": "Chromium"},
+    "files": {"exe": "thunar", "image": "thunar", "label": "Files"},
+    "file manager": {"exe": "thunar", "image": "thunar", "label": "Files"},
+    "file explorer": {"exe": "thunar", "image": "thunar", "label": "Files"},
+    "terminal": {"exe": "xfce4-terminal", "image": "xfce4-terminal", "label": "Terminal"},
+    "command prompt": {"exe": "xfce4-terminal", "image": "xfce4-terminal", "label": "Terminal"},
+    "text editor": {"exe": "mousepad", "image": "mousepad", "label": "Text Editor"},
+    "notepad": {"exe": "mousepad", "image": "mousepad", "label": "Text Editor"},
+    "calculator": {"exe": "galculator", "image": "galculator", "label": "Calculator"},
+    "calc": {"exe": "galculator", "image": "galculator", "label": "Calculator"},
+    "settings": {"exe": "xfce4-settings-manager", "image": "xfce4-settings-manager", "label": "Settings"},
+    "task manager": {"exe": "xfce4-taskmanager", "image": "xfce4-taskmanager", "label": "Task Manager"},
+}
+
 ALIASES = {
     "code": "vscode", "visual studio code": "vscode", "vs code": "vscode",
     "google chrome": "chrome", "microsoft edge": "edge", "settings app": "settings",
-    "windows explorer": "file explorer",
+    "windows explorer": "file explorer", "explorer": "file explorer",
 }
 
 
@@ -60,6 +79,8 @@ def _compact(value: Any) -> str:
 def _resolve_known_app(key: str) -> Optional[Dict[str, str]]:
     norm = _normalize_name(key)
     norm = ALIASES.get(norm, norm)
+    if platform.system() == "Linux":
+        return LINUX_APP_COMMANDS.get(norm)
     return APP_COMMANDS.get(norm)
 
 
@@ -291,12 +312,13 @@ def warm_app_index() -> None:
 
 def _discover_application(name: str) -> Optional[Dict[str, str]]:
     raw = str(name).strip()
-    direct = shutil.which(raw) or shutil.which(f"{raw}.exe")
+    direct = shutil.which(raw) or (shutil.which(f"{raw}.exe") if platform.system() == "Windows" else None)
     candidates: list[Dict[str, str]] = []
     if direct:
         candidates.append({"label": Path(direct).stem, "path": direct, "method": "path"})
-    candidates.extend(_registry_candidates(raw) or [])
-    candidates.extend(_indexed_candidates())
+    if platform.system() == "Windows":
+        candidates.extend(_registry_candidates(raw) or [])
+        candidates.extend(_indexed_candidates())
     ranked = sorted(
         ((candidate, _candidate_score(raw, candidate["label"])) for candidate in candidates),
         key=lambda item: item[1], reverse=True,
@@ -312,12 +334,16 @@ def _launch_known(spec: Dict[str, str]) -> None:
                 discovered = _discover_application(spec["label"])
                 executable = discovered.get("path") if discovered else None
             if not executable:
-                raise ToolError(f"Windows could not find the installed executable for {spec['label']}.")
-            subprocess.Popen(
-                [executable], shell=False, close_fds=True,
-                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
-                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-            )
+                raise ToolError(f"The operating system could not find the installed executable for {spec['label']}.")
+            popen_args: Dict[str, Any] = {"shell": False, "close_fds": True}
+            if platform.system() == "Windows":
+                popen_args["creationflags"] = (
+                    getattr(subprocess, "DETACHED_PROCESS", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                )
+            else:
+                popen_args["start_new_session"] = True
+            subprocess.Popen([executable], **popen_args)
         elif "shell" in spec:
             subprocess.Popen(["cmd.exe", "/c", "start", "", spec["shell"]], close_fds=True)
         elif "uwp" in spec:
@@ -332,13 +358,17 @@ def _launch_discovered(candidate: Dict[str, str]) -> None:
     try:
         if candidate.get("app_id"):
             subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{candidate['app_id']}"])
-        else:
+        elif platform.system() == "Windows":
             os.startfile(candidate["path"])
+        else:
+            subprocess.Popen([candidate["path"]], shell=False, close_fds=True, start_new_session=True)
     except Exception as error:
         raise ToolError(f"Could not launch {candidate.get('label')}: {error}") from error
 
 
 def _launch_via_windows_search(name: str) -> None:
+    if platform.system() != "Windows":
+        raise ToolError(f"No installed application matching '{name}' was found on this system.")
     try:
         import pyautogui
 
@@ -354,7 +384,43 @@ def _launch_via_windows_search(name: str) -> None:
         ) from error
 
 
+def _matching_linux_windows(name: str) -> list[Dict[str, Any]]:
+    """Return X11 windows from wmctrl without reading their contents."""
+    try:
+        output = subprocess.run(
+            ["wmctrl", "-lpGx"], capture_output=True, text=True, timeout=3, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    query = _normalize_name(name)
+    known = _resolve_known_app(name)
+    expected = _compact(known.get("image", "")) if known else _compact(query)
+    matches: list[Dict[str, Any]] = []
+    for line in output.stdout.splitlines():
+        parts = line.split(None, 8)
+        if len(parts) < 9:
+            continue
+        window_id, _desktop, pid, _x, _y, _w, _h, window_class, title = parts
+        title_norm = _normalize_name(title)
+        class_norm = _compact(window_class)
+        score = 0
+        if query and query == title_norm:
+            score = 1_000
+        elif query and set(query.split()).issubset(set(title_norm.split())):
+            score = 800
+        if expected and expected in class_norm:
+            score = max(score, 950)
+        if score:
+            matches.append({
+                "hwnd": window_id, "pid": int(pid) if pid.isdigit() else 0,
+                "title": title, "process": window_class, "score": score,
+            })
+    return sorted(matches, key=lambda item: item["score"], reverse=True)
+
+
 def _matching_windows(name: str) -> list[Dict[str, Any]]:
+    if platform.system() == "Linux":
+        return _matching_linux_windows(name)
     if platform.system() != "Windows":
         return []
     try:
@@ -400,6 +466,17 @@ def _matching_windows(name: str) -> list[Dict[str, Any]]:
 
 
 def _close_windows_with_keyboard(matches: list[Dict[str, Any]]) -> int:
+    if platform.system() == "Linux":
+        closed = 0
+        for match in matches[:8]:
+            result = subprocess.run(
+                ["wmctrl", "-ic", str(match["hwnd"])],
+                capture_output=True, text=True, timeout=3, check=False,
+            )
+            if result.returncode == 0:
+                closed += 1
+        return closed
+
     import win32gui
     from .tools_windows import _focus
     import pyautogui

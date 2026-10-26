@@ -209,6 +209,52 @@ test("redaction removes secrets from text and structured data", () => {
   assert.match(summarizeArgs({ text: "hello", execute_token: "abc", amount: 3 }), /execute_token=\[hidden\]/);
 });
 
+test("Sara OS stores provider credentials in Secret Service without file plaintext", () => {
+  const dir = tempDir();
+  const keyring = new Map<string, string>();
+  const calls: Array<{ command: string; args: string[]; input: string }> = [];
+  const runner = (command: string, args: string[], input: string) => {
+    calls.push({ command, args, input });
+    const name = args[args.length - 1];
+    if (args[0] === "store") {
+      keyring.set(name, input);
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "lookup") {
+      const value = keyring.get(name);
+      return value === undefined
+        ? { status: 1, stdout: "", stderr: "not found" }
+        : { status: 0, stdout: `${value}\n`, stderr: "" };
+    }
+    if (args[0] === "clear") {
+      keyring.delete(name);
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    return { status: 2, stdout: "", stderr: "unexpected operation" };
+  };
+
+  const store = new SecretStore(dir, "linux", { backend: "libsecret", commandRunner: runner });
+  store.set("provider:gemini", "test-key-123");
+  const metadata = fs.readFileSync(path.join(dir, "secrets.v2.json"), "utf8");
+  assert.equal(metadata.includes("test-key-123"), false);
+  assert.equal(JSON.parse(metadata).entries["provider:gemini"].protection, "libsecret");
+  const reloaded = new SecretStore(dir, "linux", { backend: "libsecret", commandRunner: runner });
+  assert.equal(reloaded.get("provider:gemini"), "test-key-123");
+  reloaded.delete("provider:gemini");
+  assert.equal(keyring.has("provider:gemini"), false);
+  assert.equal(calls.every((call) => call.command === "secret-tool"), true);
+});
+
+test("Sara OS does not silently downgrade a failed Secret Service write", () => {
+  const dir = tempDir();
+  const store = new SecretStore(dir, "linux", {
+    backend: "libsecret",
+    commandRunner: () => ({ status: 1, stdout: "", stderr: "keyring unavailable" }),
+  });
+  assert.throws(() => store.set("provider:gemini", "test-key-123"), /Secret Service store failed/);
+  assert.equal(fs.existsSync(path.join(dir, "secrets.v2.json")), false);
+});
+
 test("secret store round-trips through OS protection and migrates legacy plaintext", { skip: process.platform !== "win32" && "DPAPI is Windows-only" }, () => {
   const dir = tempDir();
   const legacy = path.join(dir, "secrets.json");

@@ -1,0 +1,44 @@
+name: Build Sara OS image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-iso:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Validate OS profile
+        run: npm run os:validate
+
+      - name: Build bootable amd64 ISO
+        run: npm run os:build
+
+      - name: Verify exported ISO checksum
+        working-directory: out/sara-os
+        run: sha256sum --check SaraOS-*.iso.sha256
+
+      - name: Upload Sara OS ISO and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: SaraOS-${{ github.sha }}-amd64
+          path: |
+            out/sara-os/SaraOS-*.iso
+            out/sara-os/SaraOS-*.iso.sha256
+            out/sara-os/build-info.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

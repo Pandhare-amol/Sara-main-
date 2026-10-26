@@ -1,0 +1,73 @@
+# Sara OS
+
+Sara OS is a bootable **x86_64 Debian 12 live/install image** that makes Sara the primary AI environment while retaining a normal XFCE desktop underneath. It does not replace the Linux kernel, Debian security model, or the existing Sara application architecture.
+
+## What the image contains
+
+- Hybrid ISO boot for UEFI and legacy BIOS PCs and virtual machines.
+- Debian's live installer, with a live session named `sara`.
+- XFCE, Chromium, NetworkManager, PipeWire, terminal, file manager, text editor, and calculator.
+- The production Sara frontend/backend and Linux-compatible local desktop agent.
+- Automatic Sara launch as a maximized Chromium application; closing it reveals the regular desktop.
+- Per-user state under `~/.local/share/sara` and logs under `~/.local/state/sara`.
+- Gemini/provider credentials entered after boot. No API key, account, memory, or personal file is built into the ISO.
+- Secret Service (`gnome-keyring`/`libsecret`) storage selected by the Sara OS session instead of the generic Linux plaintext fallback.
+
+## Build on Windows, macOS, or Linux
+
+Install Docker Desktop (Windows/macOS) or Docker/Podman (Linux), with at least 12 GB free disk space and 8 GB RAM recommended. Then run:
+
+```bash
+npm ci
+npm run os:validate
+npm run os:build
+```
+
+The output is written to `out/sara-os/`:
+
+- `SaraOS-<version>-amd64.iso`
+- `SaraOS-<version>-amd64.iso.sha256`
+- `build-info.json`
+
+Alternative engine/output examples:
+
+```bash
+npm run os:build -- --engine podman --output out/podman-image
+npm run os:build -- --no-cache
+npm run os:build -- --dry-run
+```
+
+The builder refuses to overwrite an existing ISO unless `--force` is passed. The ISO build downloads Debian packages and container base images, so it requires internet access and can take substantial time.
+
+## Boot and install
+
+1. Verify the ISO checksum using the adjacent `.sha256` file.
+2. Test in a VM first (VirtualBox, VMware, Hyper-V, QEMU, or UTM).
+3. For physical hardware, write the ISO to a USB drive with a trusted imaging tool. This overwrites the selected USB drive; the repository intentionally does not automate that destructive step.
+4. Choose the live option to test without installing, or the graphical installer to install Debian/Sara OS.
+5. Connect to a network and enter your own provider key in Sara's first-run screen.
+
+The live session is ephemeral unless persistence is configured externally. An installed system stores each user's data in that user's home directory.
+
+## Platform scope
+
+“Cross-platform” means the ISO can be **built from Windows, macOS, or Linux** and booted on standard amd64 PCs/VMs. It does not make one kernel image natively boot every CPU architecture:
+
+- Intel/AMD 64-bit: supported by this profile.
+- Apple Silicon/ARM64: use x86_64 emulation for this image; a native ARM image requires a separately tested ARM kernel/firmware profile.
+- Windows-only UI Automation, SMTC YouTube verification, DPAPI, and Microsoft Office COM remain Windows capabilities. Sara OS uses Linux/X11 controls for applications, windows, files, input, screenshots, network, and system metadata; it does not falsely report unavailable Windows integrations.
+
+## Security boundaries
+
+- Sara's web/backend and desktop-agent ports bind only to `127.0.0.1`.
+- Chromium's sandbox remains enabled.
+- The graphical session and backend run as the logged-in user, not root.
+- Power, installation, deletion, sending, and other consequential actions retain the application's confirmation policy and the OS's PolicyKit/sudo boundaries.
+- The ISO contains no credentials. `.env`, local data, personal characters, and licensed character assets are excluded from the container context.
+- A Secret Service failure is surfaced rather than silently downgrading Sara OS credentials to plaintext storage.
+
+## Validation limits
+
+`npm run os:validate` checks profile structure, boot/installer configuration, loopback binding assumptions, credential exclusions, Linux dependency separation, artifact checksums, and sandbox policy. Normal application tests and production builds still apply.
+
+Producing and booting the final ISO requires Docker plus Debian package-network access. Automated profile/build tests are not equivalent to a manual boot test on every GPU, Wi-Fi adapter, microphone, firmware implementation, or VM platform.

@@ -11,6 +11,7 @@ import ctypes
 import os
 import platform
 import shutil
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +39,32 @@ def collect_snapshot() -> Dict[str, Any]:
 
 def _active_window() -> Dict[str, Any]:
     fallback = {"title": None, "application": None, "pid": None}
+    if platform.system() == "Linux":
+        try:
+            window = subprocess.run(
+                ["xdotool", "getactivewindow"], capture_output=True, text=True,
+                timeout=2, check=False,
+            ).stdout.strip()
+            if not window:
+                return fallback
+            title = subprocess.run(
+                ["xdotool", "getwindowname", window], capture_output=True, text=True,
+                timeout=2, check=False,
+            ).stdout.strip() or None
+            pid_text = subprocess.run(
+                ["xdotool", "getwindowpid", window], capture_output=True, text=True,
+                timeout=2, check=False,
+            ).stdout.strip()
+            pid = int(pid_text) if pid_text.isdigit() else None
+            application = None
+            if pid and psutil is not None:
+                try:
+                    application = psutil.Process(pid).name()
+                except Exception:
+                    pass
+            return {"title": title, "application": application, "pid": pid}
+        except (OSError, subprocess.SubprocessError):
+            return fallback
     if platform.system() != "Windows":
         return fallback
     try:
@@ -61,11 +88,29 @@ def _active_window() -> Dict[str, Any]:
 
 
 def _visible_applications() -> List[str]:
-    if platform.system() != "Windows":
-        return []
     if psutil is None:
         return []
     applications: set[str] = set()
+    if platform.system() == "Linux":
+        try:
+            output = subprocess.run(
+                ["wmctrl", "-lp"], capture_output=True, text=True, timeout=2, check=False,
+            ).stdout
+            for line in output.splitlines():
+                parts = line.split(None, 4)
+                if len(parts) < 3 or not parts[2].isdigit():
+                    continue
+                try:
+                    name = psutil.Process(int(parts[2])).name()
+                    if name:
+                        applications.add(name)
+                except Exception:
+                    pass
+        except (OSError, subprocess.SubprocessError):
+            return []
+        return sorted(applications)[:80]
+    if platform.system() != "Windows":
+        return []
     try:
         import win32gui  # type: ignore
         import win32process  # type: ignore
@@ -141,6 +186,15 @@ def _download_snapshot() -> List[Dict[str, Any]]:
 
 
 def _idle_seconds() -> float:
+    if platform.system() == "Linux":
+        try:
+            result = subprocess.run(
+                ["xprintidle"], capture_output=True, text=True, timeout=2, check=False,
+            )
+            milliseconds = float(result.stdout.strip())
+            return max(0.0, milliseconds / 1000.0)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return 0.0
     if platform.system() != "Windows":
         return 0.0
     try:

@@ -106,3 +106,26 @@ jobs:
 
       - name: Production build
         run: npm run build
+
+  sara-os-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Validate bootable Sara OS profile
+        run: npm run os:validate
+
+      - name: Test Sara OS contracts
+        run: node --import tsx --test tests/osImage.test.ts
+
+      - name: Build production application on Linux
+        run: npm run build

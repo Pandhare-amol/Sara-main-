@@ -23,6 +23,22 @@ class ApplicationDiscoveryTests(unittest.TestCase):
         search.assert_called_once_with("A New Installed App")
         self.assertEqual(result["method"], "windows_search_keyboard")
 
+    @patch.object(tools_applications, "_launch_known")
+    @patch.object(tools_applications.platform, "system", return_value="Linux")
+    def test_sara_os_resolves_linux_desktop_applications(self, _system, launch) -> None:
+        result = tools_applications.open_application({"name": "file explorer"})
+        launch.assert_called_once()
+        self.assertEqual(launch.call_args.args[0]["exe"], "thunar")
+        self.assertEqual(result["application"], "Files")
+
+    @patch.object(tools_applications.subprocess, "run")
+    @patch.object(tools_applications.platform, "system", return_value="Linux")
+    def test_sara_os_matches_semantic_x11_window(self, _system, run) -> None:
+        run.return_value.stdout = "0x03a00007  0 1234 0 0 1200 800 chromium.Chromium host Sara - Chromium\n"
+        matches = tools_applications._matching_windows("chromium")
+        self.assertEqual(matches[0]["hwnd"], "0x03a00007")
+        self.assertGreaterEqual(matches[0]["score"], 950)
+
     @patch.object(tools_applications, "_launch_discovered")
     @patch.object(tools_applications, "_discover_application")
     def test_discovered_app_is_launched(self, discover, launch) -> None:

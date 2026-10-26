@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="75%">
+      <stop offset="0" stop-color="#17204a"/>
+      <stop offset="0.55" stop-color="#090d22"/>
+      <stop offset="1" stop-color="#03050e"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#71e9ff"/>
+      <stop offset="1" stop-color="#a778ff"/>
+    </linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="12" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <g opacity="0.18" stroke="#65dff7" fill="none">
+    <circle cx="960" cy="510" r="355"/><circle cx="960" cy="510" r="440"/><circle cx="960" cy="510" r="525"/>
+  </g>
+  <circle cx="960" cy="510" r="210" fill="none" stroke="url(#ring)" stroke-width="5" filter="url(#glow)"/>
+  <path d="M875 610 L960 360 L1045 610 M905 535 H1015" fill="none" stroke="url(#ring)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+  <text x="960" y="810" text-anchor="middle" fill="#e9f9ff" font-family="sans-serif" font-size="72" letter-spacing="22">SARA OS</text>
+  <text x="960" y="870" text-anchor="middle" fill="#87a6bd" font-family="sans-serif" font-size="24" letter-spacing="6">PRIVATE AI DESKTOP</text>
+</svg>

@@ -1,0 +1,13 @@
+# Linux/Sara OS desktop-agent dependencies.
+# Windows-only COM, UIA, WinRT, pycaw, and pywin32 packages intentionally stay
+# in requirements.txt and are not installed into the Linux image.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pyautogui==0.9.54
+psutil==6.1.1
+pyperclip==1.9.0
+pytesseract==0.3.13
+Pillow==11.0.0
+mss==10.2.0
+Send2Trash==1.8.3
+python-multipart==0.0.20

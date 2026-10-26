@@ -1,0 +1,63 @@
+#!/bin/sh
+# Start the local Sara backend and open the graphical shell. This runs as the
+# logged-in desktop user, never as root. All HTTP services remain loopback-only.
+set -eu
+
+APP_DIR=/opt/sara/app
+NODE=/opt/sara/runtime/bin/node
+URL=http://127.0.0.1:3000
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/sara"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/sara"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/sara-$UID}"
+
+install -d -m 700 "$DATA_DIR" "$STATE_DIR" "$RUNTIME_DIR"
+export NODE_ENV=production
+export MYRAA_OS=1
+export MYRAA_OS_VERSION=1
+export MYRAA_PORT=3000
+export MYRAA_DATA_DIR="$DATA_DIR"
+export MYRAA_SECRET_BACKEND=libsecret
+export PYTHONPATH="/opt/sara/python-packages:$APP_DIR${PYTHONPATH:+:$PYTHONPATH}"
+export PATH="/opt/sara/runtime/bin:$PATH"
+
+# Serialize backend startup so a menu click during autostart cannot create a
+# second backend process. A stale PID is harmless because readiness is checked
+# over the loopback socket rather than trusted from a file.
+(
+  flock 9
+  if ! curl --silent --show-error --fail --max-time 1 "$URL/" >/dev/null 2>&1; then
+    cd "$APP_DIR"
+    nohup "$NODE" "$APP_DIR/dist/server.cjs" >>"$STATE_DIR/backend.log" 2>&1 &
+    printf '%s\n' "$!" >"$RUNTIME_DIR/backend.pid"
+  fi
+) 9>"$RUNTIME_DIR/backend.lock"
+
+attempt=0
+while [ "$attempt" -lt 60 ]; do
+  if curl --silent --show-error --fail --max-time 1 "$URL/" >/dev/null 2>&1; then
+    break
+  fi
+  attempt=$((attempt + 1))
+  sleep 0.5
+done
+
+if ! curl --silent --show-error --fail --max-time 2 "$URL/" >/dev/null 2>&1; then
+  if command -v zenity >/dev/null 2>&1; then
+    zenity --error --title="Sara OS" --text="Sara could not start. See $STATE_DIR/backend.log"
+  fi
+  exit 1
+fi
+
+BROWSER=$(command -v chromium || command -v chromium-browser || true)
+if [ -z "$BROWSER" ]; then
+  xdg-open "$URL"
+  exit 0
+fi
+
+# Chromium retains its normal process sandbox; never disable it in this launcher.
+exec "$BROWSER" \
+  --app="$URL" \
+  --start-maximized \
+  --no-first-run \
+  --disable-session-crashed-bubble \
+  --user-data-dir="$HOME/.config/sara/chromium"

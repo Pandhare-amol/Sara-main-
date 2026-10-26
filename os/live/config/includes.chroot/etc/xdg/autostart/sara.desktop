@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Sara
+Comment=Open the Sara AI operating environment
+Exec=/usr/local/bin/sara-session
+Icon=/usr/share/icons/hicolor/256x256/apps/sara.png
+Terminal=false
+Categories=Utility;System;
+StartupNotify=true
